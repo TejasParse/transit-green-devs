@@ -8,26 +8,44 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const palette = Colors[colorScheme ?? 'light'];
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
+        tabBarActiveTintColor: palette.tint,
+        tabBarInactiveTintColor: palette.tabIconDefault,
         headerShown: false,
         tabBarButton: HapticTab,
+        tabBarStyle: {
+          backgroundColor: colorScheme === 'dark' ? '#152019' : '#FBFDF9',
+          borderTopColor: colorScheme === 'dark' ? '#223228' : '#D5DDD4',
+          height: 66,
+          paddingBottom: 8,
+          paddingTop: 8,
+        },
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: 'Map',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="map.fill" color={color} />,
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="leaderboard"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'Leaderboard',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="trophy.fill" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ color }) => (
+            <IconSymbol size={28} name="person.crop.circle.fill" color={color} />
+          ),
         }}
       />
     </Tabs>
