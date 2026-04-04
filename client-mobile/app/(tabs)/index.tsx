@@ -1,98 +1,1689 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { type ComponentProps, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
+import MapView, { Marker, Polyline, Region } from 'react-native-maps';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { createTrip } from '@/lib/api';
+import { formatCo2, formatDistance, formatDuration } from '@/lib/formatters';
+import { createAutocompleteSessionToken, fetchPlaceSuggestions } from '@/lib/google-places';
+import { buildRoutePlan } from '@/lib/google-routes';
+import { useUserProfile } from '@/context/user-context';
+import {
+  AddressSuggestion,
+  RouteOption,
+  RoutePlan,
+  TripPayload,
+  TripRecord,
+  WaypointInput,
+} from '@/types/trips';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
-export default function HomeScreen() {
+const DEFAULT_REGION: Region = {
+  latitude: 33.4234,
+  longitude: -111.94,
+  latitudeDelta: 0.08,
+  longitudeDelta: 0.08,
+};
+
+function buildRegion(points: { latitude: number; longitude: number }[]): Region {
+  if (points.length === 0) {
+    return DEFAULT_REGION;
+  }
+
+  const latitudes = points.map((point) => point.latitude);
+  const longitudes = points.map((point) => point.longitude);
+  const minLatitude = Math.min(...latitudes);
+  const maxLatitude = Math.max(...latitudes);
+  const minLongitude = Math.min(...longitudes);
+  const maxLongitude = Math.max(...longitudes);
+
+  return {
+    latitude: (minLatitude + maxLatitude) / 2,
+    longitude: (minLongitude + maxLongitude) / 2,
+    latitudeDelta: Math.max((maxLatitude - minLatitude) * 1.6, 0.02),
+    longitudeDelta: Math.max((maxLongitude - minLongitude) * 1.6, 0.02),
+  };
+}
+
+function samplePolyline(points: { latitude: number; longitude: number }[], maxPoints = 90) {
+  if (points.length <= maxPoints) {
+    return points;
+  }
+
+  const step = (points.length - 1) / (maxPoints - 1);
+
+  return Array.from({ length: maxPoints }, (_, index) => {
+    const pointIndex = Math.min(Math.round(index * step), points.length - 1);
+    return points[pointIndex];
+  });
+}
+
+function getRouteIcon(kind: RouteOption['kind']): ComponentProps<typeof MaterialIcons>['name'] {
+  switch (kind) {
+    case 'walk':
+      return 'directions-walk';
+    case 'bike':
+      return 'directions-bike';
+    case 'transit':
+      return 'directions-transit';
+    case 'drive':
+      return 'directions-car';
+  }
+}
+
+function getOriginAlertMessage(
+  locationStatus: 'loading' | 'ready' | 'denied' | 'error',
+  useCurrentLocation: boolean
+) {
+  if (locationStatus === 'loading' && useCurrentLocation) {
+    return 'Checking your current location...';
+  }
+
+  if (locationStatus === 'denied') {
+    return 'Location permission is off. Enter a starting place manually or enable location access.';
+  }
+
+  if (locationStatus === 'error') {
+    return 'We could not read your live location. Enter a start place manually or try again.';
+  }
+
+  return null;
+}
+
+function getRouteModeLabel(kind: RouteOption['kind']) {
+  switch (kind) {
+    case 'walk':
+      return 'Walking';
+    case 'bike':
+      return 'Cycling';
+    case 'transit':
+      return 'Transit';
+    case 'drive':
+      return 'Driving';
+  }
+}
+
+function getRouteStartLabel(kind: RouteOption['kind'], isSimulating: boolean) {
+  if (isSimulating) {
+    switch (kind) {
+      case 'walk':
+        return 'Walking...';
+      case 'bike':
+        return 'Cycling...';
+      case 'transit':
+        return 'Navigating...';
+      case 'drive':
+        return 'Driving...';
+    }
+  }
+
+  switch (kind) {
+    case 'walk':
+      return 'Start walking navigation';
+    case 'bike':
+      return 'Start bike navigation';
+    case 'transit':
+      return 'Start transit navigation';
+    case 'drive':
+      return 'Start drive navigation';
+  }
+}
+
+function getRouteFooterMessage(kind: RouteOption['kind']) {
+  switch (kind) {
+    case 'walk':
+      return 'Following the selected walking route. The map is now in focused navigation mode.';
+    case 'bike':
+      return 'Following the selected cycling route. The map is now in focused navigation mode.';
+    case 'transit':
+      return 'Following the selected public transit route. The map is now in focused navigation mode.';
+    case 'drive':
+      return 'Following the selected fuel-efficient driving route. The map is now in focused navigation mode.';
+  }
+}
+
+function getSimulationMarkerTitle(kind: RouteOption['kind']) {
+  switch (kind) {
+    case 'walk':
+      return 'Walker';
+    case 'bike':
+      return 'Bike';
+    case 'transit':
+      return 'Transit';
+    case 'drive':
+      return 'Car';
+  }
+}
+
+export default function MapScreen() {
+  const colorScheme = useColorScheme();
+  const palette =
+    colorScheme === 'dark'
+      ? {
+          background: '#0D1511',
+          card: 'rgba(17, 28, 22, 0.94)',
+          cardSecondary: '#18241D',
+          border: '#2D3B32',
+          text: '#EAF5EE',
+          muted: '#A8B6AE',
+          accent: '#4DA86D',
+          accentAlt: '#F0B14A',
+          danger: '#F16F63',
+          input: '#132019',
+        }
+      : {
+          background: '#EDF3EC',
+          card: 'rgba(255, 255, 255, 0.95)',
+          cardSecondary: '#F6FAF4',
+          border: '#D4DED2',
+          text: '#173126',
+          muted: '#5E7267',
+          accent: '#20744A',
+          accentAlt: '#D9811B',
+          danger: '#C64537',
+          input: '#F8FBF7',
+        };
+
+  const { userId, displayName, notifyTripSaved } = useUserProfile();
+
+  const mapRef = useRef<MapView | null>(null);
+  const miniMapRef = useRef<MapView | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tripStartedAtRef = useRef<string | null>(null);
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const originSessionTokenRef = useRef(createAutocompleteSessionToken());
+  const destinationSessionTokenRef = useRef(createAutocompleteSessionToken());
+
+  const [originInput, setOriginInput] = useState('Current location');
+  const [destinationInput, setDestinationInput] = useState('');
+  const [useCurrentLocation, setUseCurrentLocation] = useState(true);
+  const [activeField, setActiveField] = useState<'origin' | 'destination' | null>(null);
+  const [originSuggestions, setOriginSuggestions] = useState<AddressSuggestion[]>([]);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<AddressSuggestion[]>([]);
+  const [selectedOriginSuggestion, setSelectedOriginSuggestion] = useState<AddressSuggestion | null>(null);
+  const [selectedDestinationSuggestion, setSelectedDestinationSuggestion] = useState<AddressSuggestion | null>(
+    null
+  );
+  const [isSearchingOrigin, setIsSearchingOrigin] = useState(false);
+  const [isSearchingDestination, setIsSearchingDestination] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(
+    null
+  );
+  const [locationStatus, setLocationStatus] = useState<'loading' | 'ready' | 'denied' | 'error'>(
+    'loading'
+  );
+  const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [isFetchingRoutes, setIsFetchingRoutes] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationPath, setSimulationPath] = useState<{ latitude: number; longitude: number }[] | null>(
+    null
+  );
+  const [simulationIndex, setSimulationIndex] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [summaryTrip, setSummaryTrip] = useState<TripRecord | TripPayload | null>(null);
+  const [summaryVisible, setSummaryVisible] = useState(false);
+  const [isSavingTrip, setIsSavingTrip] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCurrentLocation() {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (permission.status !== 'granted') {
+          setLocationStatus('denied');
+          setUseCurrentLocation(false);
+          setOriginInput('');
+          return;
+        }
+
+        const currentPosition = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        if (!isMounted) {
+          return;
+        }
+
+        const nextLocation = {
+          latitude: currentPosition.coords.latitude,
+          longitude: currentPosition.coords.longitude,
+        };
+
+        setCurrentLocation(nextLocation);
+        setLocationStatus('ready');
+        setOriginInput('Current location');
+        mapRef.current?.animateToRegion(
+          {
+            ...nextLocation,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
+          },
+          700
+        );
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+
+        setLocationStatus('error');
+        setUseCurrentLocation(false);
+        setOriginInput('');
+      }
+    }
+
+    void loadCurrentLocation();
+
+    return () => {
+      isMounted = false;
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (useCurrentLocation) {
+      setOriginSuggestions([]);
+      setIsSearchingOrigin(false);
+      return;
+    }
+
+    const query = originInput.trim();
+
+    if (query.length < 2 || selectedOriginSuggestion?.fullText === query) {
+      setOriginSuggestions([]);
+      setIsSearchingOrigin(false);
+      return;
+    }
+
+    let isCancelled = false;
+    const timeout = setTimeout(async () => {
+      setIsSearchingOrigin(true);
+
+      try {
+        const suggestions = await fetchPlaceSuggestions({
+          input: query,
+          sessionToken: originSessionTokenRef.current,
+          currentLocation,
+        });
+
+        if (!isCancelled) {
+          setOriginSuggestions(suggestions);
+        }
+      } catch {
+        if (!isCancelled) {
+          setOriginSuggestions([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsSearchingOrigin(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [currentLocation, originInput, selectedOriginSuggestion?.fullText, useCurrentLocation]);
+
+  useEffect(() => {
+    const query = destinationInput.trim();
+
+    if (query.length < 2 || selectedDestinationSuggestion?.fullText === query) {
+      setDestinationSuggestions([]);
+      setIsSearchingDestination(false);
+      return;
+    }
+
+    let isCancelled = false;
+    const timeout = setTimeout(async () => {
+      setIsSearchingDestination(true);
+
+      try {
+        const suggestions = await fetchPlaceSuggestions({
+          input: query,
+          sessionToken: destinationSessionTokenRef.current,
+          currentLocation,
+        });
+
+        if (!isCancelled) {
+          setDestinationSuggestions(suggestions);
+        }
+      } catch {
+        if (!isCancelled) {
+          setDestinationSuggestions([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsSearchingDestination(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [currentLocation, destinationInput, selectedDestinationSuggestion?.fullText]);
+
+  const selectedRoute = routePlan?.options.find((route) => route.id === selectedRouteId) ?? null;
+  const tracedPath =
+    simulationPath && isSimulating ? simulationPath.slice(0, Math.max(simulationIndex + 1, 1)) : [];
+  const simulationMarker =
+    simulationPath && simulationPath.length > 0
+      ? simulationPath[Math.min(simulationIndex, simulationPath.length - 1)]
+      : null;
+
+  const summaryRegion = useMemo(
+    () => buildRegion(summaryTrip?.pathPoints ?? selectedRoute?.polyline ?? []),
+    [selectedRoute?.polyline, summaryTrip?.pathPoints]
+  );
+  const showOriginSuggestions = !useCurrentLocation && activeField === 'origin' && originInput.trim().length >= 2;
+  const showDestinationSuggestions =
+    activeField === 'destination' && destinationInput.trim().length >= 2;
+  const simulationProgress = Math.round(
+    (simulationIndex / Math.max((simulationPath?.length ?? 1) - 1, 1)) * 100
+  );
+  const originAlertMessage = getOriginAlertMessage(locationStatus, useCurrentLocation);
+  const canUseCurrentLocation = locationStatus === 'ready' && Boolean(currentLocation);
+
+  function clearBlurTimeout() {
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+      blurTimeoutRef.current = null;
+    }
+  }
+
+  function scheduleSuggestionClose() {
+    clearBlurTimeout();
+    blurTimeoutRef.current = setTimeout(() => {
+      setActiveField(null);
+    }, 150);
+  }
+
+  function resetOriginToCurrentLocation() {
+    clearBlurTimeout();
+    setUseCurrentLocation(true);
+    setOriginInput('Current location');
+    setOriginSuggestions([]);
+    setSelectedOriginSuggestion(null);
+    originSessionTokenRef.current = createAutocompleteSessionToken();
+    if (activeField === 'origin') {
+      setActiveField(null);
+    }
+  }
+
+  function selectSuggestion(field: 'origin' | 'destination', suggestion: AddressSuggestion) {
+    clearBlurTimeout();
+
+    if (field === 'origin') {
+      setUseCurrentLocation(false);
+      setOriginInput(suggestion.fullText);
+      setSelectedOriginSuggestion(suggestion);
+      setOriginSuggestions([]);
+      originSessionTokenRef.current = createAutocompleteSessionToken();
+    } else {
+      setDestinationInput(suggestion.fullText);
+      setSelectedDestinationSuggestion(suggestion);
+      setDestinationSuggestions([]);
+      destinationSessionTokenRef.current = createAutocompleteSessionToken();
+    }
+
+    setActiveField(null);
+  }
+
+  useEffect(() => {
+    if (!selectedRoute) {
+      return;
+    }
+
+    mapRef.current?.fitToCoordinates(selectedRoute.polyline, {
+      edgePadding: {
+        top: 180,
+        right: 48,
+        bottom: 260,
+        left: 48,
+      },
+      animated: true,
+    });
+  }, [selectedRouteId, selectedRoute]);
+
+  useEffect(() => {
+    if (!summaryVisible || !summaryTrip?.pathPoints?.length) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      miniMapRef.current?.fitToCoordinates(summaryTrip.pathPoints, {
+        edgePadding: {
+          top: 30,
+          right: 30,
+          bottom: 30,
+          left: 30,
+        },
+        animated: false,
+      });
+    }, 120);
+
+    return () => clearTimeout(timeout);
+  }, [summaryTrip, summaryVisible]);
+
+  async function handleFindRoutes() {
+    const trimmedDestination = destinationInput.trim();
+    const trimmedOrigin = originInput.trim();
+
+    if (!trimmedDestination) {
+      setErrorMessage('Enter a destination before searching.');
+      return;
+    }
+
+    let origin: WaypointInput;
+    let destination: WaypointInput;
+
+    if (useCurrentLocation) {
+      if (!currentLocation) {
+        setErrorMessage('Your current location is not ready yet. Try again in a moment.');
+        return;
+      }
+
+      origin = {
+        type: 'coordinates',
+        coordinates: currentLocation,
+      };
+    } else {
+      if (!trimmedOrigin) {
+        setErrorMessage('Enter a start location or switch back to current location.');
+        return;
+      }
+
+      origin = selectedOriginSuggestion?.placeId
+        ? {
+            type: 'placeId',
+            placeId: selectedOriginSuggestion.placeId,
+          }
+        : {
+            type: 'address',
+            address: trimmedOrigin,
+          };
+    }
+
+    destination = selectedDestinationSuggestion?.placeId
+      ? {
+          type: 'placeId',
+          placeId: selectedDestinationSuggestion.placeId,
+        }
+      : {
+          type: 'address',
+          address: trimmedDestination,
+        };
+
+    setErrorMessage(null);
+    setSaveError(null);
+    setActiveField(null);
+    setOriginSuggestions([]);
+    setDestinationSuggestions([]);
+    setIsFetchingRoutes(true);
+    setIsSimulating(false);
+    setSimulationPath(null);
+    setSimulationIndex(0);
+
+    try {
+      const nextRoutePlan = await buildRoutePlan({
+        origin,
+        destination,
+        originLabel: useCurrentLocation
+          ? 'Current location'
+          : selectedOriginSuggestion?.fullText ?? trimmedOrigin,
+        destinationLabel: selectedDestinationSuggestion?.fullText ?? trimmedDestination,
+      });
+
+      setRoutePlan(nextRoutePlan);
+      setSelectedRouteId(nextRoutePlan.options[0]?.id ?? null);
+    } catch (error) {
+      setRoutePlan(null);
+      setSelectedRouteId(null);
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to load routes right now.');
+    } finally {
+      setIsFetchingRoutes(false);
+    }
+  }
+
+  async function handleCompleteTrip(
+    route: RouteOption,
+    fullPath: { latitude: number; longitude: number }[]
+  ) {
+    const tripPayload: TripPayload = {
+      userId,
+      displayName,
+      routeType: route.kind,
+      routeTitle: route.title,
+      originLabel: routePlan?.originLabel ?? (originInput.trim() || 'Current location'),
+      destinationLabel: routePlan?.destinationLabel ?? destinationInput.trim(),
+      distanceMeters: route.distanceMeters,
+      durationSeconds: route.durationSeconds,
+      co2Kg: Number(route.co2Kg.toFixed(3)),
+      co2SavedKg: Number(route.co2SavedKg.toFixed(3)),
+      startedAt: tripStartedAtRef.current ?? new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      pathPoints: fullPath,
+      metadata: {
+        badges: route.badges,
+        summary: route.summary,
+      },
+    };
+
+    setSummaryTrip(tripPayload);
+    setSummaryVisible(true);
+    setIsSavingTrip(true);
+    setSaveError(null);
+
+    try {
+      const savedTrip = await createTrip(tripPayload);
+      setSummaryTrip(savedTrip);
+      notifyTripSaved();
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : 'The trip finished, but saving it failed.'
+      );
+    } finally {
+      setIsSavingTrip(false);
+    }
+  }
+
+  function handleStartSimulation() {
+    if (!selectedRoute) {
+      return;
+    }
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    const sampledPath = samplePolyline(selectedRoute.polyline);
+
+    setSaveError(null);
+    setSummaryTrip(null);
+    setSummaryVisible(false);
+    setSimulationPath(sampledPath);
+    setSimulationIndex(0);
+    setIsSimulating(true);
+    tripStartedAtRef.current = new Date().toISOString();
+
+    timerRef.current = setInterval(() => {
+      setSimulationIndex((current) => {
+        const nextIndex = current + 1;
+
+        if (nextIndex >= sampledPath.length) {
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+          }
+
+          setIsSimulating(false);
+          void handleCompleteTrip(selectedRoute, selectedRoute.polyline);
+          return sampledPath.length - 1;
+        }
+
+        if (nextIndex % 8 === 0) {
+          mapRef.current?.animateToRegion(
+            {
+              ...sampledPath[nextIndex],
+              latitudeDelta: 0.03,
+              longitudeDelta: 0.03,
+            },
+            250
+          );
+        }
+
+        return nextIndex;
+      });
+    }, 220);
+  }
+
+  function handleCloseSummary() {
+    setSummaryVisible(false);
+    setSimulationPath(null);
+    setSimulationIndex(0);
+    setIsSimulating(false);
+    tripStartedAtRef.current = null;
+  }
+
+  function renderSuggestionList(
+    suggestions: AddressSuggestion[],
+    isLoading: boolean,
+    emptyText: string,
+    onSelect: (suggestion: AddressSuggestion) => void
+  ) {
+    if (isLoading) {
+      return (
+        <View
+          style={[
+            styles.suggestionContainer,
+            {
+              backgroundColor: palette.cardSecondary,
+              borderColor: palette.border,
+            },
+          ]}>
+          <View style={styles.suggestionLoadingRow}>
+            <ActivityIndicator color={palette.accent} size="small" />
+            <ThemedText style={{ color: palette.text }}>Searching addresses...</ThemedText>
+          </View>
+        </View>
+      );
+    }
+
+    if (suggestions.length === 0) {
+      return (
+        <View
+          style={[
+            styles.suggestionContainer,
+            {
+              backgroundColor: palette.cardSecondary,
+              borderColor: palette.border,
+            },
+          ]}>
+          <ThemedText style={{ color: palette.muted }}>{emptyText}</ThemedText>
+          <ThemedText style={[styles.suggestionFooter, { color: palette.muted }]}>
+            Suggestions powered by Google
+          </ThemedText>
+        </View>
+      );
+    }
+
+    return (
+      <View
+        style={[
+          styles.suggestionContainer,
+          {
+            backgroundColor: palette.cardSecondary,
+            borderColor: palette.border,
+          },
+        ]}>
+        {suggestions.map((suggestion, index) => (
+          <Pressable
+            key={suggestion.id}
+            onPressIn={clearBlurTimeout}
+            onPress={() => onSelect(suggestion)}
+            style={[
+              styles.suggestionRow,
+              index < suggestions.length - 1
+                ? {
+                    borderBottomColor: palette.border,
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                  }
+                : null,
+            ]}>
+            <MaterialIcons name="location-on" size={18} color={palette.accent} />
+            <View style={styles.suggestionTextBlock}>
+              <ThemedText style={[styles.suggestionPrimary, { color: palette.text }]}>
+                {suggestion.primaryText}
+              </ThemedText>
+              <ThemedText style={{ color: palette.muted }}>
+                {suggestion.secondaryText || suggestion.fullText}
+              </ThemedText>
+            </View>
+            {suggestion.distanceMeters ? (
+              <View
+                style={[
+                  styles.suggestionDistanceBadge,
+                  {
+                    backgroundColor: `${palette.accent}16`,
+                  },
+                ]}>
+                <ThemedText style={{ color: palette.accent, fontWeight: '600' }}>
+                  {formatDistance(suggestion.distanceMeters)}
+                </ThemedText>
+              </View>
+            ) : null}
+          </Pressable>
+        ))}
+        <ThemedText style={[styles.suggestionFooter, { color: palette.muted }]}>
+          Suggestions powered by Google
+        </ThemedText>
+      </View>
+    );
+  }
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
+      <View style={styles.container}>
+        <MapView ref={mapRef} style={StyleSheet.absoluteFill} initialRegion={DEFAULT_REGION}>
+          {routePlan?.options.map((route) => {
+            const isSelected = route.id === selectedRouteId;
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+            return (
+              <Polyline
+                key={route.id}
+                coordinates={route.polyline}
+                strokeColor={route.color}
+                strokeWidth={isSelected ? 6 : 4}
+                lineCap="round"
+                lineJoin="round"
+                tappable
+                onPress={() => !isSimulating && setSelectedRouteId(route.id)}
+                zIndex={isSelected ? 5 : 2}
+              />
+            );
+          })}
+
+          {selectedRoute ? (
+            <>
+              <Marker coordinate={selectedRoute.start} title="Start" description={routePlan?.originLabel} />
+              <Marker
+                coordinate={selectedRoute.end}
+                title="Destination"
+                description={routePlan?.destinationLabel}
+              />
+            </>
+          ) : null}
+
+          {tracedPath.length > 1 && selectedRoute ? (
+            <Polyline
+              coordinates={tracedPath}
+              strokeColor={selectedRoute.color}
+              strokeWidth={7}
+              lineDashPattern={[1, 0]}
+              zIndex={8}
+            />
+          ) : null}
+
+          {simulationMarker && selectedRoute ? (
+            <Marker
+              coordinate={simulationMarker}
+              title={getSimulationMarkerTitle(selectedRoute.kind)}
+              anchor={{ x: 0.5, y: 0.5 }}>
+              <View
+                style={[
+                  styles.vehicleMarker,
+                  {
+                    backgroundColor: selectedRoute.color,
+                  },
+                ]}>
+                <MaterialIcons name={getRouteIcon(selectedRoute.kind)} size={18} color="#FFFFFF" />
+              </View>
+            </Marker>
+          ) : null}
+        </MapView>
+
+        <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+          {isSimulating && selectedRoute ? (
+            <>
+              <View
+                style={[
+                  styles.simulationHud,
+                  {
+                    backgroundColor: palette.card,
+                    borderColor: palette.border,
+                  },
+                ]}>
+                <View style={styles.simulationHudHeader}>
+                  <View style={styles.simulationHudIcon}>
+                    <MaterialIcons name={getRouteIcon(selectedRoute.kind)} size={20} color={selectedRoute.color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={[styles.simulationTitle, { color: palette.text }]}>
+                      {getRouteModeLabel(selectedRoute.kind)} navigation
+                    </ThemedText>
+                    <ThemedText style={{ color: palette.muted }}>
+                      {routePlan?.originLabel} to {routePlan?.destinationLabel}
+                    </ThemedText>
+                  </View>
+                  <View
+                    style={[
+                      styles.progressChip,
+                      {
+                        backgroundColor: colorScheme === 'dark' ? '#1A2D21' : '#EAF4ED',
+                      },
+                    ]}>
+                    <MaterialIcons name="near-me" size={16} color={palette.accent} />
+                    <ThemedText style={{ color: palette.text }}>{simulationProgress}%</ThemedText>
+                  </View>
+                </View>
+
+                <View style={styles.simulationStatsRow}>
+                  <View style={styles.simulationStatCard}>
+                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Route</ThemedText>
+                    <ThemedText style={{ color: palette.text }}>{selectedRoute.title}</ThemedText>
+                  </View>
+                  <View style={styles.simulationStatCard}>
+                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>ETA</ThemedText>
+                    <ThemedText style={{ color: palette.text }}>
+                      {formatDuration(selectedRoute.durationSeconds)}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.simulationStatCard}>
+                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>CO2</ThemedText>
+                    <ThemedText style={{ color: palette.text }}>{formatCo2(selectedRoute.co2Kg)}</ThemedText>
+                  </View>
+                </View>
+              </View>
+
+              <View
+                style={[
+                  styles.simulationFooter,
+                  {
+                    backgroundColor: palette.card,
+                    borderColor: palette.border,
+                  },
+                ]}>
+                <MaterialIcons name="navigation" size={18} color={selectedRoute.color} />
+                <ThemedText style={{ color: palette.text, flex: 1 }}>
+                  {getRouteFooterMessage(selectedRoute.kind)}
+                </ThemedText>
+              </View>
+            </>
+          ) : (
+            <>
+              <View
+                style={[
+                  styles.searchPanel,
+                  {
+                    backgroundColor: palette.card,
+                    borderColor: palette.border,
+                  },
+                ]}>
+                <View style={styles.headerRow}>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText
+                      type="title"
+                      style={[
+                        styles.screenTitle,
+                        {
+                          color: palette.text,
+                        },
+                      ]}>
+                      Route Cleaner
+                    </ThemedText>
+                    <ThemedText style={{ color: palette.muted }}>
+                      Compare walk, bike, transit, and drive routes, then start navigation on the
+                      route you choose.
+                    </ThemedText>
+                  </View>
+                  {isFetchingRoutes ? <ActivityIndicator color={palette.accent} /> : null}
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <ThemedText style={[styles.inputLabel, { color: palette.muted }]}>From</ThemedText>
+                  <View style={styles.originRow}>
+                    <TextInput
+                      value={originInput}
+                      onFocus={() => {
+                        clearBlurTimeout();
+                        setActiveField('origin');
+                        if (useCurrentLocation) {
+                          setUseCurrentLocation(false);
+                          setOriginInput('');
+                          setSelectedOriginSuggestion(null);
+                          originSessionTokenRef.current = createAutocompleteSessionToken();
+                        }
+                      }}
+                      onChangeText={(value) => {
+                        clearBlurTimeout();
+                        setActiveField('origin');
+                        if (useCurrentLocation) {
+                          setUseCurrentLocation(false);
+                        }
+                        setSelectedOriginSuggestion(null);
+                        setOriginInput(value);
+                      }}
+                      onBlur={scheduleSuggestionClose}
+                      placeholder="Enter a custom start"
+                      placeholderTextColor={palette.muted}
+                      style={[
+                        styles.input,
+                        styles.originInput,
+                        {
+                          color: palette.text,
+                          backgroundColor: palette.input,
+                          borderColor: palette.border,
+                        },
+                      ]}
+                    />
+                    <Pressable
+                      disabled={!canUseCurrentLocation}
+                      onPress={() => {
+                        if (!canUseCurrentLocation) {
+                          return;
+                        }
+
+                        resetOriginToCurrentLocation();
+                      }}
+                      style={[
+                        styles.locationButton,
+                        {
+                          backgroundColor: useCurrentLocation ? palette.accent : palette.cardSecondary,
+                          borderColor: useCurrentLocation ? palette.accent : palette.border,
+                          opacity: canUseCurrentLocation || useCurrentLocation ? 1 : 0.55,
+                        },
+                      ]}>
+                      <MaterialIcons
+                        name={useCurrentLocation ? 'my-location' : 'near-me'}
+                        size={18}
+                        color={useCurrentLocation ? '#FFFFFF' : palette.text}
+                      />
+                      <ThemedText
+                        style={{
+                          color: useCurrentLocation ? '#FFFFFF' : palette.text,
+                          fontWeight: '600',
+                        }}>
+                        Current
+                      </ThemedText>
+                    </Pressable>
+                  </View>
+                  {showOriginSuggestions
+                    ? renderSuggestionList(
+                        originSuggestions,
+                        isSearchingOrigin,
+                        'No matching starting points found yet.',
+                        (suggestion) => selectSuggestion('origin', suggestion)
+                      )
+                    : null}
+                  {originAlertMessage ? (
+                    <View
+                      style={[
+                        styles.originAlert,
+                        {
+                          backgroundColor: colorScheme === 'dark' ? '#132019' : '#F3F8F1',
+                          borderColor: palette.border,
+                        },
+                      ]}>
+                      <MaterialIcons
+                        name={locationStatus === 'loading' ? 'my-location' : 'info-outline'}
+                        size={18}
+                        color={palette.accentAlt}
+                      />
+                      <ThemedText style={{ color: palette.text, flex: 1 }}>{originAlertMessage}</ThemedText>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <ThemedText style={[styles.inputLabel, { color: palette.muted }]}>To</ThemedText>
+                  <TextInput
+                    value={destinationInput}
+                    onFocus={() => {
+                      clearBlurTimeout();
+                      setActiveField('destination');
+                    }}
+                    onChangeText={(value) => {
+                      clearBlurTimeout();
+                      setActiveField('destination');
+                      setSelectedDestinationSuggestion(null);
+                      setDestinationInput(value);
+                    }}
+                    onBlur={scheduleSuggestionClose}
+                    placeholder="Enter your destination"
+                    placeholderTextColor={palette.muted}
+                    style={[
+                      styles.input,
+                      {
+                        color: palette.text,
+                        backgroundColor: palette.input,
+                        borderColor: palette.border,
+                      },
+                    ]}
+                  />
+                  {showDestinationSuggestions
+                    ? renderSuggestionList(
+                        destinationSuggestions,
+                        isSearchingDestination,
+                        'No destination suggestions found yet.',
+                        (suggestion) => selectSuggestion('destination', suggestion)
+                      )
+                    : null}
+                </View>
+
+                <Pressable
+                  disabled={isFetchingRoutes || isSimulating}
+                  onPress={() => void handleFindRoutes()}
+                  style={[
+                    styles.primaryButton,
+                    {
+                      backgroundColor: isFetchingRoutes || isSimulating ? '#7FA98E' : palette.accent,
+                    },
+                  ]}>
+                  <MaterialIcons name="travel-explore" size={20} color="#FFFFFF" />
+                  <ThemedText style={styles.primaryButtonText}>Find low-carbon routes</ThemedText>
+                </Pressable>
+
+                {errorMessage ? (
+                  <View
+                    style={[
+                      styles.messageRow,
+                      {
+                        backgroundColor: colorScheme === 'dark' ? '#2F1A18' : '#FFF2EF',
+                        borderColor: colorScheme === 'dark' ? '#6A3431' : '#F0CCC7',
+                      },
+                    ]}>
+                    <MaterialIcons name="error-outline" size={18} color={palette.danger} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>{errorMessage}</ThemedText>
+                  </View>
+                ) : null}
+              </View>
+
+              <View
+                style={[
+                  styles.bottomSheet,
+                  {
+                    backgroundColor: palette.card,
+                    borderColor: palette.border,
+                  },
+                ]}>
+                {!routePlan ? (
+                  <View style={styles.emptyState}>
+                    <MaterialIcons name="route" size={28} color={palette.accentAlt} />
+                    <ThemedText type="subtitle" style={{ color: palette.text }}>
+                      Ready when you are
+                    </ThemedText>
+                    <ThemedText style={{ color: palette.muted, textAlign: 'center' }}>
+                      Search any trip to compare walking, cycling, public transit, and
+                      fuel-efficient driving routes from Google Maps.
+                    </ThemedText>
+                  </View>
+                ) : (
+                  <ScrollView contentContainerStyle={styles.bottomSheetContent} showsVerticalScrollIndicator={false}>
+                    <View style={styles.sheetHeader}>
+                      <View style={{ flex: 1 }}>
+                        <ThemedText type="subtitle" style={{ color: palette.text }}>
+                          Route comparison ready
+                        </ThemedText>
+                        <ThemedText style={{ color: palette.muted }}>
+                          Options are ordered from the lowest estimated carbon impact upward.
+                        </ThemedText>
+                      </View>
+                    </View>
+
+                    {routePlan.notices.slice(0, 2).map((notice) => (
+                      <View
+                        key={notice}
+                        style={[
+                          styles.noticeCard,
+                          {
+                            backgroundColor: colorScheme === 'dark' ? '#132019' : '#F3F8F1',
+                            borderColor: palette.border,
+                          },
+                        ]}>
+                        <MaterialIcons name="info-outline" size={18} color={palette.accentAlt} />
+                        <ThemedText style={{ color: palette.text, flex: 1 }}>{notice}</ThemedText>
+                      </View>
+                    ))}
+
+                    {routePlan.options.map((route) => {
+                      const isSelected = selectedRouteId === route.id;
+
+                      return (
+                        <Pressable
+                          key={route.id}
+                          disabled={isSimulating}
+                          onPress={() => setSelectedRouteId(route.id)}
+                          style={[
+                            styles.routeCard,
+                            {
+                              backgroundColor: isSelected ? palette.cardSecondary : palette.card,
+                              borderColor: isSelected ? route.color : palette.border,
+                            },
+                          ]}>
+                          <View style={styles.routeHeader}>
+                            <View
+                              style={[
+                                styles.routeIcon,
+                                {
+                                  backgroundColor: `${route.color}20`,
+                                },
+                              ]}>
+                              <MaterialIcons name={getRouteIcon(route.kind)} size={22} color={route.color} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
+                                {route.title}
+                              </ThemedText>
+                              <ThemedText style={{ color: palette.muted }}>{route.subtitle}</ThemedText>
+                            </View>
+                            {isSelected ? (
+                              <MaterialIcons name="check-circle" size={22} color={route.color} />
+                            ) : null}
+                          </View>
+
+                          <View style={styles.badgeRow}>
+                            {route.badges.map((badge) => (
+                              <View
+                                key={`${route.id}-${badge}`}
+                                style={[
+                                  styles.badge,
+                                  {
+                                    backgroundColor: `${route.color}18`,
+                                  },
+                                ]}>
+                                <ThemedText style={{ color: route.color, fontWeight: '600' }}>{badge}</ThemedText>
+                              </View>
+                            ))}
+                          </View>
+
+                          <View style={styles.metricRow}>
+                            <View style={styles.metricCard}>
+                              <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Time</ThemedText>
+                              <ThemedText style={{ color: palette.text }}>{formatDuration(route.durationSeconds)}</ThemedText>
+                            </View>
+                            <View style={styles.metricCard}>
+                              <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Distance</ThemedText>
+                              <ThemedText style={{ color: palette.text }}>{formatDistance(route.distanceMeters)}</ThemedText>
+                            </View>
+                            <View style={styles.metricCard}>
+                              <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>CO2</ThemedText>
+                              <ThemedText style={{ color: palette.text }}>{formatCo2(route.co2Kg)}</ThemedText>
+                            </View>
+                          </View>
+
+                          <ThemedText style={{ color: palette.text }}>{route.summary}</ThemedText>
+                          <ThemedText style={{ color: palette.muted }}>
+                            {route.kind === 'drive'
+                              ? route.co2SavedKg > 0
+                                ? `Estimated to save ${formatCo2(route.co2SavedKg)} compared with another car route.`
+                                : 'Estimated emissions for the selected car route.'
+                              : route.co2SavedKg > 0
+                                ? `Estimated to save ${formatCo2(route.co2SavedKg)} compared with the fuel-efficient drive option.`
+                                : 'Estimated emissions for this route type.'}
+                          </ThemedText>
+
+                          {isSelected ? (
+                            <Pressable
+                              disabled={isSimulating}
+                              onPress={handleStartSimulation}
+                              style={[
+                                styles.secondaryButton,
+                                {
+                                  backgroundColor: route.color,
+                                },
+                              ]}>
+                              <MaterialIcons name="navigation" size={20} color="#FFFFFF" />
+                              <ThemedText style={styles.secondaryButtonText}>
+                                {getRouteStartLabel(route.kind, isSimulating)}
+                              </ThemedText>
+                            </Pressable>
+                          ) : null}
+
+                          {isSelected && route.warnings[0] ? (
+                            <ThemedText style={{ color: palette.muted }}>{route.warnings[0]}</ThemedText>
+                          ) : null}
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+              </View>
+            </>
+          )}
+        </View>
+
+        <Modal transparent visible={summaryVisible} animationType="fade" onRequestClose={handleCloseSummary}>
+          <View style={styles.modalBackdrop}>
+            <View
+              style={[
+                styles.modalCard,
+                {
+                  backgroundColor: palette.card,
+                  borderColor: palette.border,
+                },
+              ]}>
+              <View style={styles.modalHeader}>
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="title" style={[styles.modalTitle, { color: palette.text }]}>
+                    Trip complete
+                  </ThemedText>
+                  <ThemedText style={{ color: palette.muted }}>
+                    {summaryTrip?.originLabel} to {summaryTrip?.destinationLabel}
+                  </ThemedText>
+                </View>
+                <Pressable onPress={handleCloseSummary}>
+                  <MaterialIcons name="close" size={22} color={palette.text} />
+                </Pressable>
+              </View>
+
+              <MapView
+                ref={miniMapRef}
+                style={styles.summaryMap}
+                initialRegion={summaryRegion}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                rotateEnabled={false}
+                pitchEnabled={false}>
+                {summaryTrip?.pathPoints?.length ? (
+                  <>
+                    <Polyline
+                      coordinates={summaryTrip.pathPoints}
+                      strokeColor={selectedRoute?.color ?? palette.accent}
+                      strokeWidth={5}
+                    />
+                    <Marker coordinate={summaryTrip.pathPoints[0]} title="Start" />
+                    <Marker
+                      coordinate={summaryTrip.pathPoints[summaryTrip.pathPoints.length - 1]}
+                      title="Destination"
+                    />
+                  </>
+                ) : null}
+              </MapView>
+
+              <View style={styles.metricRow}>
+                <View style={styles.metricCard}>
+                  <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Time taken</ThemedText>
+                  <ThemedText style={{ color: palette.text }}>
+                    {summaryTrip ? formatDuration(summaryTrip.durationSeconds) : '--'}
+                  </ThemedText>
+                </View>
+                <View style={styles.metricCard}>
+                  <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Distance</ThemedText>
+                  <ThemedText style={{ color: palette.text }}>
+                    {summaryTrip ? formatDistance(summaryTrip.distanceMeters) : '--'}
+                  </ThemedText>
+                </View>
+                <View style={styles.metricCard}>
+                  <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>CO2 emitted</ThemedText>
+                  <ThemedText style={{ color: palette.text }}>
+                    {summaryTrip ? formatCo2(summaryTrip.co2Kg) : '--'}
+                  </ThemedText>
+                </View>
+              </View>
+
+              <View
+                style={[
+                  styles.saveStatusCard,
+                  {
+                    backgroundColor: colorScheme === 'dark' ? '#122018' : '#F5FAF4',
+                    borderColor: palette.border,
+                  },
+                ]}>
+                {isSavingTrip ? (
+                  <>
+                    <ActivityIndicator color={palette.accent} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>
+                      Saving this trip to Postgres history...
+                    </ThemedText>
+                  </>
+                ) : saveError ? (
+                  <>
+                    <MaterialIcons name="error-outline" size={18} color={palette.danger} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>{saveError}</ThemedText>
+                  </>
+                ) : (
+                  <>
+                    <MaterialIcons name="check-circle-outline" size={18} color={palette.accent} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>
+                      Trip saved. It is now available in your history and the leaderboard.
+                    </ThemedText>
+                  </>
+                )}
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+  },
+  searchPanel: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 18,
+    gap: 14,
+    shadowColor: '#000000',
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
+  simulationHud: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 16,
+    gap: 14,
+    shadowColor: '#000000',
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
+  simulationHudHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  simulationHudIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(32, 116, 74, 0.12)',
+  },
+  simulationTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  simulationStatsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  simulationStatCard: {
+    flex: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(127, 127, 127, 0.08)',
+    gap: 4,
+  },
+  simulationFooter: {
+    marginHorizontal: 16,
+    marginTop: 'auto',
+    marginBottom: 18,
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    shadowColor: '#000000',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  screenTitle: {
+    fontSize: 28,
+    lineHeight: 30,
+  },
+  inputGroup: {
+    gap: 6,
+  },
+  originRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 16,
+  },
+  originInput: {
+    flex: 1,
+  },
+  locationButton: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  suggestionContainer: {
+    borderWidth: 1,
+    borderRadius: 18,
+    marginTop: 6,
+    overflow: 'hidden',
+  },
+  suggestionLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  suggestionTextBlock: {
+    flex: 1,
+    gap: 2,
+  },
+  suggestionPrimary: {
+    fontWeight: '700',
+  },
+  suggestionDistanceBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  suggestionFooter: {
+    fontSize: 12,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+  },
+  originAlert: {
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  stepContainer: {
+  primaryButton: {
+    borderRadius: 16,
+    paddingVertical: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
     gap: 8,
-    marginBottom: 8,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  messageRow: {
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bottomSheet: {
+    marginHorizontal: 16,
+    marginTop: 'auto',
+    marginBottom: 14,
+    borderRadius: 28,
+    borderWidth: 1,
+    maxHeight: '46%',
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
+  bottomSheetContent: {
+    padding: 18,
+    gap: 14,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 30,
+    gap: 10,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  progressChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  noticeCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  routeCard: {
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 16,
+    gap: 12,
+  },
+  routeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  routeIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routeTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  badge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  metricRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  metricCard: {
+    flex: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(127, 127, 127, 0.08)',
+    gap: 4,
+  },
+  metricLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  secondaryButton: {
+    borderRadius: 16,
+    paddingVertical: 13,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  secondaryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  vehicleMarker: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(4, 8, 6, 0.5)',
+  },
+  modalCard: {
+    borderRadius: 28,
+    borderWidth: 1,
+    padding: 18,
+    gap: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  modalTitle: {
+    fontSize: 26,
+    lineHeight: 28,
+  },
+  summaryMap: {
+    height: 180,
+    borderRadius: 20,
+  },
+  saveStatusCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 });
