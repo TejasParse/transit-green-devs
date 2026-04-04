@@ -1,5 +1,11 @@
 const { pool } = require('./pool');
 
+async function resetSchema() {
+  await pool.query(`
+    DROP TABLE IF EXISTS trips
+  `);
+}
+
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS trips (
@@ -30,4 +36,5 @@ async function ensureSchema() {
 
 module.exports = {
   ensureSchema,
+  resetSchema,
 };
