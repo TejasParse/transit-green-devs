@@ -2,3 +2,4 @@
 **/.env
 **/expo-env.d.ts
 **/.expo/
+./client-mobile/.gitignore
