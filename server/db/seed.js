@@ -8,9 +8,53 @@ const { createTripRecord } = require('./trip-queries');
 const now = Date.now();
 const CARS_CSV_PATH = path.join(__dirname, '..', '..', 'co2.csv');
 
+const demoProfiles = [
+  {
+    key: 'campus-rider',
+    userName: 'Campus Rider',
+    carId: 1,
+    totalPoints: 0,
+    email: 'campus.rider@example.com',
+    age: 22,
+    gender: 'female',
+    licenceNo: 'A94276153',
+  },
+  {
+    key: 'bike-commuter',
+    userName: 'Bike Commuter',
+    carId: null,
+    totalPoints: 0,
+    email: 'bike.commuter@example.com',
+    age: 28,
+    gender: 'male',
+    licenceNo: null,
+  },
+  {
+    key: 'transit-fan',
+    userName: 'Transit Fan',
+    carId: null,
+    totalPoints: 0,
+    email: 'transit.fan@example.com',
+    age: 25,
+    gender: 'female',
+    licenceNo: null,
+  },
+  {
+    key: 'community-driver',
+    userName: 'Community Driver',
+    carId: 4,
+    totalPoints: 0,
+    email: 'community.driver@example.com',
+    age: 31,
+    gender: 'non-binary',
+    licenceNo: '615208473',
+  },
+];
+
 const demoTrips = [
   {
-    userId: 'campus-rider',
+    key: 'walk-ended',
+    profileKey: 'campus-rider',
     displayName: 'Campus Rider',
     routeType: 'walk',
     routeTitle: 'Walk route',
@@ -20,8 +64,10 @@ const demoTrips = [
     durationSeconds: 1320,
     co2Kg: 0,
     co2SavedKg: 0.241,
-    startedAt: new Date(now - 1000 * 60 * 180).toISOString(),
-    completedAt: new Date(now - 1000 * 60 * 158).toISOString(),
+    availableSeats: 0,
+    status: 'ended',
+    startedAt: new Date(now - 1000 * 60 * 240).toISOString(),
+    completedAt: new Date(now - 1000 * 60 * 218).toISOString(),
     pathPoints: [
       { latitude: 33.4206, longitude: -111.9344 },
       { latitude: 33.4222, longitude: -111.9314 },
@@ -33,7 +79,8 @@ const demoTrips = [
     },
   },
   {
-    userId: 'bike-commuter',
+    key: 'bike-ended',
+    profileKey: 'bike-commuter',
     displayName: 'Bike Commuter',
     routeType: 'bike',
     routeTitle: 'Bike route',
@@ -43,8 +90,10 @@ const demoTrips = [
     durationSeconds: 1080,
     co2Kg: 0,
     co2SavedKg: 0.414,
-    startedAt: new Date(now - 1000 * 60 * 130).toISOString(),
-    completedAt: new Date(now - 1000 * 60 * 112).toISOString(),
+    availableSeats: 0,
+    status: 'ended',
+    startedAt: new Date(now - 1000 * 60 * 205).toISOString(),
+    completedAt: new Date(now - 1000 * 60 * 187).toISOString(),
     pathPoints: [
       { latitude: 33.4148, longitude: -111.9091 },
       { latitude: 33.4187, longitude: -111.9215 },
@@ -56,30 +105,8 @@ const demoTrips = [
     },
   },
   {
-    userId: 'transit-fan',
-    displayName: 'Transit Fan',
-    routeType: 'transit',
-    routeTitle: 'Public transit',
-    originLabel: 'Mesa Arts Center',
-    destinationLabel: 'ASU Tempe Campus',
-    distanceMeters: 7600,
-    durationSeconds: 2100,
-    co2Kg: 0.38,
-    co2SavedKg: 0.679,
-    startedAt: new Date(now - 1000 * 60 * 90).toISOString(),
-    completedAt: new Date(now - 1000 * 60 * 55).toISOString(),
-    pathPoints: [
-      { latitude: 33.4155, longitude: -111.8315 },
-      { latitude: 33.4157, longitude: -111.8995 },
-      { latitude: 33.4234, longitude: -111.94 },
-    ],
-    metadata: {
-      badges: ['Shared ride', 'Low carbon'],
-      summary: 'Seeded public transit trip for local development.',
-    },
-  },
-  {
-    userId: 'campus-rider',
+    key: 'drive-ended',
+    profileKey: 'campus-rider',
     displayName: 'Campus Rider',
     routeType: 'drive',
     routeTitle: 'Fuel-efficient drive',
@@ -89,8 +116,10 @@ const demoTrips = [
     durationSeconds: 1260,
     co2Kg: 1.021,
     co2SavedKg: 0.148,
-    startedAt: new Date(now - 1000 * 60 * 45).toISOString(),
-    completedAt: new Date(now - 1000 * 60 * 24).toISOString(),
+    availableSeats: 1,
+    status: 'ended',
+    startedAt: new Date(now - 1000 * 60 * 150).toISOString(),
+    completedAt: new Date(now - 1000 * 60 * 129).toISOString(),
     pathPoints: [
       { latitude: 33.4351, longitude: -112.0078 },
       { latitude: 33.4318, longitude: -111.9745 },
@@ -98,9 +127,100 @@ const demoTrips = [
     ],
     metadata: {
       badges: ['Fuel-efficient', 'Car navigation'],
-      summary: 'Seeded driving trip for local development.',
+      summary: 'Seeded completed driving trip for local development.',
     },
   },
+  {
+    key: 'transit-active',
+    profileKey: 'transit-fan',
+    displayName: 'Transit Fan',
+    routeType: 'transit',
+    routeTitle: 'Public transit',
+    originLabel: 'Mesa Arts Center',
+    destinationLabel: 'ASU Tempe Campus',
+    distanceMeters: 7600,
+    durationSeconds: 2100,
+    co2Kg: 0.38,
+    co2SavedKg: 0.679,
+    availableSeats: 0,
+    status: 'active',
+    startedAt: new Date(now - 1000 * 60 * 35).toISOString(),
+    completedAt: new Date(now + 1000 * 60 * 5).toISOString(),
+    pathPoints: [
+      { latitude: 33.4155, longitude: -111.8315 },
+      { latitude: 33.4157, longitude: -111.8995 },
+      { latitude: 33.4234, longitude: -111.94 },
+    ],
+    metadata: {
+      badges: ['Shared ride', 'Low carbon'],
+      summary: 'Seeded active transit trip for local development.',
+    },
+  },
+  {
+    key: 'drive-scheduled',
+    profileKey: 'campus-rider',
+    displayName: 'Campus Rider',
+    routeType: 'drive',
+    routeTitle: 'Fuel-efficient drive',
+    originLabel: 'ASU Tempe Campus',
+    destinationLabel: 'Scottsdale Waterfront',
+    distanceMeters: 15100,
+    durationSeconds: 1440,
+    co2Kg: 1.184,
+    co2SavedKg: 0.163,
+    availableSeats: 2,
+    status: 'scheduled',
+    startedAt: new Date(now + 1000 * 60 * 60).toISOString(),
+    completedAt: new Date(now + 1000 * 60 * 84).toISOString(),
+    pathPoints: [
+      { latitude: 33.4234, longitude: -111.94 },
+      { latitude: 33.4573, longitude: -111.9261 },
+      { latitude: 33.5018, longitude: -111.9251 },
+    ],
+    metadata: {
+      badges: ['Fuel-efficient', 'Car navigation'],
+      summary: 'Seeded scheduled driving trip for local development.',
+    },
+  },
+  {
+    key: 'drive-cancelled',
+    profileKey: 'community-driver',
+    displayName: 'Community Driver',
+    routeType: 'drive',
+    routeTitle: 'Fuel-efficient drive',
+    originLabel: 'Downtown Phoenix',
+    destinationLabel: 'Tempe Marketplace',
+    distanceMeters: 13800,
+    durationSeconds: 1320,
+    co2Kg: 1.097,
+    co2SavedKg: 0.152,
+    availableSeats: 3,
+    status: 'cancelled',
+    startedAt: new Date(now - 1000 * 60 * 90).toISOString(),
+    completedAt: new Date(now - 1000 * 60 * 68).toISOString(),
+    pathPoints: [
+      { latitude: 33.4484, longitude: -112.074 },
+      { latitude: 33.4382, longitude: -112.0126 },
+      { latitude: 33.4301, longitude: -111.9012 },
+    ],
+    metadata: {
+      badges: ['Fuel-efficient', 'Car navigation'],
+      summary: 'Seeded cancelled driving trip for local development.',
+    },
+  },
+];
+
+const demoTripUsers = [
+  { tripKey: 'walk-ended', driverKey: 'campus-rider', riderKey: 'campus-rider' },
+  { tripKey: 'bike-ended', driverKey: 'bike-commuter', riderKey: 'bike-commuter' },
+  { tripKey: 'drive-ended', driverKey: 'campus-rider', riderKey: 'campus-rider' },
+  { tripKey: 'drive-ended', driverKey: 'campus-rider', riderKey: 'bike-commuter' },
+  { tripKey: 'transit-active', driverKey: 'transit-fan', riderKey: 'transit-fan' },
+  { tripKey: 'drive-scheduled', driverKey: 'campus-rider', riderKey: 'campus-rider' },
+  { tripKey: 'drive-scheduled', driverKey: 'campus-rider', riderKey: 'transit-fan' },
+  { tripKey: 'drive-scheduled', driverKey: 'campus-rider', riderKey: 'community-driver' },
+  { tripKey: 'drive-cancelled', driverKey: 'community-driver', riderKey: 'community-driver' },
+  { tripKey: 'drive-cancelled', driverKey: 'community-driver', riderKey: 'bike-commuter' },
 ];
 
 function parseCsvLine(line) {
@@ -227,6 +347,88 @@ async function seedCarsFromCsv() {
   return records.length;
 }
 
+async function seedProfiles() {
+  const profileIdMap = new Map();
+
+  for (const profile of demoProfiles) {
+    const result = await pool.query(
+      `
+        INSERT INTO profiles (
+          user_name,
+          car_id,
+          total_points,
+          email,
+          age,
+          gender,
+          licence_no
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+      `,
+      [
+        profile.userName,
+        profile.carId,
+        profile.totalPoints,
+        profile.email,
+        profile.age,
+        profile.gender,
+        profile.licenceNo,
+      ]
+    );
+
+    profileIdMap.set(profile.key, result.rows[0].id);
+  }
+
+  return profileIdMap;
+}
+
+async function seedTrips(profileIdMap) {
+  const tripIdMap = new Map();
+
+  for (const trip of demoTrips) {
+    const savedTrip = await createTripRecord({
+      userId: profileIdMap.get(trip.profileKey),
+      displayName: trip.displayName,
+      routeType: trip.routeType,
+      routeTitle: trip.routeTitle,
+      originLabel: trip.originLabel,
+      destinationLabel: trip.destinationLabel,
+      distanceMeters: trip.distanceMeters,
+      durationSeconds: trip.durationSeconds,
+      co2Kg: trip.co2Kg,
+      co2SavedKg: trip.co2SavedKg,
+      availableSeats: trip.availableSeats,
+      status: trip.status,
+      startedAt: trip.startedAt,
+      completedAt: trip.completedAt,
+      pathPoints: trip.pathPoints,
+      metadata: trip.metadata,
+    });
+
+    tripIdMap.set(trip.key, savedTrip.id);
+  }
+
+  return tripIdMap;
+}
+
+async function seedTripUsers(profileIdMap, tripIdMap) {
+  for (const tripUser of demoTripUsers) {
+    await pool.query(
+      `
+        INSERT INTO trip_users (trip_id, driver_id, rider_id)
+        VALUES ($1, $2, $3)
+      `,
+      [
+        tripIdMap.get(tripUser.tripKey),
+        profileIdMap.get(tripUser.driverKey),
+        profileIdMap.get(tripUser.riderKey),
+      ]
+    );
+  }
+
+  return demoTripUsers.length;
+}
+
 async function run() {
   const keepEmpty = process.argv.includes('--empty');
 
@@ -240,13 +442,12 @@ async function run() {
   }
 
   const carCount = await seedCarsFromCsv();
-
-  for (const trip of demoTrips) {
-    await createTripRecord(trip);
-  }
+  const profileIdMap = await seedProfiles();
+  const tripIdMap = await seedTrips(profileIdMap);
+  const tripUserCount = await seedTripUsers(profileIdMap, tripIdMap);
 
   console.log(
-    `Created a fresh schema and inserted ${carCount} cars plus ${demoTrips.length} seed trips.`
+    `Created a fresh schema and inserted ${carCount} cars, ${profileIdMap.size} profiles, ${tripIdMap.size} trips, and ${tripUserCount} trip-user records.`
   );
 }
 

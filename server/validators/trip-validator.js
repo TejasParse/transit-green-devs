@@ -6,6 +6,16 @@ function readRequiredString(value, fieldName, maxLength = 160) {
   return value.trim().slice(0, maxLength);
 }
 
+function readPositiveInteger(value, fieldName) {
+  const parsedValue = Number(value);
+
+  if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+    throw new Error(`${fieldName} must be a positive integer.`);
+  }
+
+  return parsedValue;
+}
+
 function readNumber(value, fieldName) {
   const parsedValue = Number(value);
 
@@ -50,8 +60,11 @@ function validateTripPayload(body) {
       : {};
 
   return {
-    userId: readRequiredString(body?.userId, 'userId'),
-    displayName: readRequiredString(body?.displayName, 'displayName'),
+    userId: readPositiveInteger(body?.userId, 'userId'),
+    displayName:
+      typeof body?.displayName === 'string' && body.displayName.trim()
+        ? body.displayName.trim().slice(0, 160)
+        : null,
     routeType: readRequiredString(body?.routeType, 'routeType', 40),
     routeTitle: readRequiredString(body?.routeTitle, 'routeTitle'),
     originLabel: readRequiredString(body?.originLabel, 'originLabel'),
@@ -68,6 +81,7 @@ function validateTripPayload(body) {
 }
 
 module.exports = {
+  readPositiveInteger,
   readRequiredString,
   validateTripPayload,
 };

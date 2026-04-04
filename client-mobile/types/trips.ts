@@ -59,7 +59,7 @@ export type RoutePlan = {
 };
 
 export type TripPayload = {
-  userId: string;
+  userId: number;
   displayName: string;
   routeType: RouteKind;
   routeTitle: string;
@@ -69,6 +69,8 @@ export type TripPayload = {
   durationSeconds: number;
   co2Kg: number;
   co2SavedKg: number;
+  availableSeats?: number;
+  status?: 'scheduled' | 'active' | 'cancelled' | 'ended';
   startedAt: string;
   completedAt: string;
   pathPoints: Coordinates[];
@@ -81,7 +83,7 @@ export type TripRecord = TripPayload & {
 };
 
 export type LeaderboardEntry = {
-  userId: string;
+  userId: number;
   displayName: string;
   totalTrips: number;
   totalDistanceMeters: number;

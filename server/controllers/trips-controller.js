@@ -3,11 +3,11 @@ const {
   getLeaderboardEntries,
   getTripsByUserId,
 } = require('../db/trip-queries');
-const { readRequiredString, validateTripPayload } = require('../validators/trip-validator');
+const { readPositiveInteger, validateTripPayload } = require('../validators/trip-validator');
 
 async function getTrips(req, res, next) {
   try {
-    const userId = readRequiredString(req.query.userId, 'userId');
+    const userId = readPositiveInteger(req.query.userId, 'userId');
     const trips = await getTripsByUserId(userId);
     res.json(trips);
   } catch (error) {

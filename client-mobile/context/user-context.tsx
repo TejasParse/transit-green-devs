@@ -1,14 +1,14 @@
 import { createContext, PropsWithChildren, useContext, useMemo, useState } from 'react';
 
 type UserContextValue = {
-  userId: string;
+  userId: number;
   displayName: string;
   setDisplayName: (value: string) => void;
   tripVersion: number;
   notifyTripSaved: () => void;
 };
 
-const DEFAULT_USER_ID = 'campus-rider';
+const DEFAULT_USER_ID = 1;
 const DEFAULT_DISPLAY_NAME = 'Campus Rider';
 
 const UserContext = createContext<UserContextValue | null>(null);

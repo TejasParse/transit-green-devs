@@ -58,8 +58,8 @@ export function fetchLeaderboard() {
   return request<LeaderboardEntry[]>('/api/leaderboard');
 }
 
-export function fetchUserTrips(userId: string) {
-  const searchParams = new URLSearchParams({ userId });
+export function fetchUserTrips(userId: number) {
+  const searchParams = new URLSearchParams({ userId: String(userId) });
   return request<TripRecord[]>(`/api/trips?${searchParams.toString()}`);
 }
 

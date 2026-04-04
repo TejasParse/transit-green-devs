@@ -82,7 +82,7 @@ The three main tabs are:
 User state is currently lightweight and local to the app. It is managed in [`client-mobile/context/user-context.tsx`](./client-mobile/context/user-context.tsx).
 
 What it stores:
-- a fixed `userId` of `campus-rider`
+- a fixed demo `userId` of `1`, which maps to the seeded `profiles` row for `Campus Rider`
 - an editable `displayName`
 - a `tripVersion` counter used to trigger refreshes in leaderboard and profile screens after a trip is saved
 
@@ -240,11 +240,25 @@ This default matches [`server/docker-compose.yml`](./server/docker-compose.yml).
 
 ### Database Schema
 
-The backend automatically creates a `trips` table with these important fields:
+The backend automatically creates these main tables:
 
+`cars`
+- imported from [`co2.csv`](./co2.csv)
+- stores vehicle specs, fuel consumption, CO2 emissions, and a seeded `capacity` value between 4 and 6
+
+`profiles`
 - `id`
-- `user_id`
-- `display_name`
+- `user_name`
+- `car_id` referencing `cars.id`
+- `total_points`
+- `email`
+- `age`
+- `gender`
+- `licence_no` for the user's driving licence number, optional
+
+`trips`
+- `id`
+- `user_id` referencing `profiles.id`
 - `route_type`
 - `route_title`
 - `origin_label`
@@ -253,10 +267,19 @@ The backend automatically creates a `trips` table with these important fields:
 - `duration_seconds`
 - `co2_kg`
 - `co2_saved_kg`
+- `available_seats`
+- `status` with values `scheduled`, `active`, `cancelled`, `ended`
 - `started_at`
 - `completed_at`
 - `path_points` as JSONB
 - `metadata` as JSONB
+- `created_at`
+
+`trip_users`
+- `id`
+- `trip_id` referencing `trips.id`
+- `driver_id` referencing `profiles.id`
+- `rider_id` referencing `profiles.id`
 - `created_at`
 
 ### API Endpoints
