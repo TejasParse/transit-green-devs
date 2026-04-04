@@ -1,8 +1,12 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
 const { pool } = require('./pool');
 const { ensureSchema, resetSchema } = require('./schema');
 const { createTripRecord } = require('./trip-queries');
 
 const now = Date.now();
+const CARS_CSV_PATH = path.join(__dirname, '..', '..', 'co2.csv');
 
 const demoTrips = [
   {
@@ -99,6 +103,130 @@ const demoTrips = [
   },
 ];
 
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+
+    if (character === '"') {
+      if (inQuotes && nextCharacter === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (character === ',' && !inQuotes) {
+      values.push(current);
+      current = '';
+      continue;
+    }
+
+    current += character;
+  }
+
+  values.push(current);
+  return values;
+}
+
+function randomCapacity() {
+  return Math.floor(Math.random() * 3) + 4;
+}
+
+function toNumber(value, fieldName) {
+  const parsedValue = Number(value);
+
+  if (!Number.isFinite(parsedValue)) {
+    throw new Error(`Invalid numeric value for ${fieldName}: ${value}`);
+  }
+
+  return parsedValue;
+}
+
+async function seedCarsFromCsv() {
+  const fileContents = fs.readFileSync(CARS_CSV_PATH, 'utf8').trim();
+  const lines = fileContents.split(/\r?\n/);
+
+  if (lines.length < 2) {
+    throw new Error('co2.csv does not contain any car records to seed.');
+  }
+
+  const [, ...records] = lines;
+
+  await pool.query('BEGIN');
+
+  try {
+    for (const record of records) {
+      const [
+        make,
+        model,
+        vehicleClass,
+        engineSize,
+        cylinders,
+        transmission,
+        fuelType,
+        fuelConsumptionCity,
+        fuelConsumptionHwy,
+        fuelConsumptionComb,
+        fuelConsumptionCombMpg,
+        co2Emissions,
+      ] = parseCsvLine(record);
+
+      await pool.query(
+        `
+          INSERT INTO cars (
+            make,
+            model,
+            vehicle_class,
+            engine_size_l,
+            cylinders,
+            transmission,
+            fuel_type,
+            fuel_consumption_city_l_per_100km,
+            fuel_consumption_hwy_l_per_100km,
+            fuel_consumption_comb_l_per_100km,
+            fuel_consumption_comb_mpg,
+            co2_emissions_g_per_km,
+            capacity
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13
+          )
+        `,
+        [
+          make,
+          model,
+          vehicleClass,
+          toNumber(engineSize, 'Engine Size(L)'),
+          Math.round(toNumber(cylinders, 'Cylinders')),
+          transmission,
+          fuelType,
+          toNumber(fuelConsumptionCity, 'Fuel Consumption City (L/100 km)'),
+          toNumber(fuelConsumptionHwy, 'Fuel Consumption Hwy (L/100 km)'),
+          toNumber(fuelConsumptionComb, 'Fuel Consumption Comb (L/100 km)'),
+          Math.round(toNumber(fuelConsumptionCombMpg, 'Fuel Consumption Comb (mpg)')),
+          Math.round(toNumber(co2Emissions, 'CO2 Emissions(g/km)')),
+          randomCapacity(),
+        ]
+      );
+    }
+
+    await pool.query('COMMIT');
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    throw error;
+  }
+
+  return records.length;
+}
+
 async function run() {
   const keepEmpty = process.argv.includes('--empty');
 
@@ -111,11 +239,15 @@ async function run() {
     return;
   }
 
+  const carCount = await seedCarsFromCsv();
+
   for (const trip of demoTrips) {
     await createTripRecord(trip);
   }
 
-  console.log(`Created a fresh schema and inserted ${demoTrips.length} seed trips.`);
+  console.log(
+    `Created a fresh schema and inserted ${carCount} cars plus ${demoTrips.length} seed trips.`
+  );
 }
 
 run()
