@@ -54,7 +54,7 @@ transit-green-devs/
 │   ├── docker-compose.yml # Local Postgres setup
 │   └── index.js           # Server startup entry point
 ├── co2.csv                # Project data asset
-└── .env                   # Shared environment variables
+└── README.md              # Project overview and setup guide
 ```
 
 ## Frontend Architecture
@@ -384,6 +384,13 @@ cd server
 docker compose up -d
 ```
 
+Optional: reset the database and recreate fresh tables
+
+```bash
+cd server
+npm run db:reset
+```
+
 ### 3. Start the backend
 
 ```bash
@@ -429,6 +436,7 @@ npm start
 - [`server/controllers/trips-controller.js`](./server/controllers/trips-controller.js): request handlers for trip APIs
 - [`server/db/trip-queries.js`](./server/db/trip-queries.js): SQL queries and row mapping
 - [`server/db/schema.js`](./server/db/schema.js): schema bootstrap
+- [`server/db/seed.js`](./server/db/seed.js): database reset and seed script
 - [`server/validators/trip-validator.js`](./server/validators/trip-validator.js): backend payload validation
 - [`server/docker-compose.yml`](./server/docker-compose.yml): local Postgres bootstrap
 
