@@ -89,7 +89,7 @@ function getGoogleMapsApiKey() {
     process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim();
 
   if (!apiKey) {
-    throw new Error('Missing Google Maps API key. Add it to the repo root .env file.');
+    throw new Error('Missing Google Maps API key. Add it to client-mobile/.env.');
   }
 
   return apiKey;

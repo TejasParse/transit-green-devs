@@ -331,20 +331,33 @@ Why this split was chosen:
 
 ## Environment Variables
 
-These values should exist in the repo root `.env`.
+The project now uses separate env files for the mobile app and the backend.
+
+Frontend env in [`client-mobile/.env`](./client-mobile/.env):
 
 ```env
-GOOGLE_MAPS_API_KEY=your_google_maps_key
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/innovationhacks
+EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_key
 EXPO_PUBLIC_API_BASE_URL=http://localhost:3001
 ```
 
+Backend env in [`server/.env`](./server/.env):
+
+```env
+PORT=3001
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/innovationhacks
+```
+
+Example templates are included in:
+- [`client-mobile/.env.example`](./client-mobile/.env.example)
+- [`server/.env.example`](./server/.env.example)
+
 ### Notes
 
-- `GOOGLE_MAPS_API_KEY` is read by the Expo app config and by Google API helper modules.
+- `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` is read by the Expo app config and by Google API helper modules.
 - `DATABASE_URL` is used only by the backend.
 - `EXPO_PUBLIC_API_BASE_URL` tells the mobile app where the Express API is running.
 - If testing on a physical device, replace `localhost` with your computer’s LAN IP.
+- After changing frontend env values, restart Expo so the config reloads.
 
 ## Local Development Setup
 

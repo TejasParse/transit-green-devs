@@ -37,7 +37,6 @@ function loadEnvFile(filePath) {
 }
 
 loadEnvFile(path.join(__dirname, '..', '.env'));
-loadEnvFile(path.join(__dirname, '..', '..', '.env'));
 
 const PORT = Number(process.env.PORT || 3001);
 const DATABASE_URL =
