@@ -2,6 +2,7 @@ const { pool } = require('./pool');
 
 async function resetSchema() {
   await pool.query(`
+    DROP TABLE IF EXISTS forest_trees;
     DROP TABLE IF EXISTS trip_users;
     DROP TABLE IF EXISTS trips;
     DROP TABLE IF EXISTS profiles;
@@ -77,6 +78,19 @@ async function ensureSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS forest_trees (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      tree_type TEXT NOT NULL,
+      grid_x INTEGER NOT NULL CHECK (grid_x >= 0),
+      grid_y INTEGER NOT NULL CHECK (grid_y >= 0),
+      points_cost INTEGER NOT NULL CHECK (points_cost >= 0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, grid_x, grid_y)
+    )
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS trips_user_completed_idx
     ON trips (user_id, completed_at DESC)
   `);
@@ -99,6 +113,11 @@ async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS trip_users_rider_idx
     ON trip_users (rider_id)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS forest_trees_user_idx
+    ON forest_trees (user_id, created_at DESC)
   `);
 }
 

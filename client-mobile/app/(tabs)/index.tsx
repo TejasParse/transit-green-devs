@@ -166,6 +166,14 @@ function getSimulationMarkerTitle(kind: RouteOption['kind']) {
   }
 }
 
+function isPlaceIdNotFoundError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /NOT_FOUND:\s*Place ID/i.test(error.message) && /not found/i.test(error.message);
+}
+
 export default function MapScreen() {
   const colorScheme = useColorScheme();
   const palette =
@@ -540,6 +548,11 @@ export default function MapScreen() {
           address: trimmedDestination,
         };
 
+    const originLabel = useCurrentLocation
+      ? 'Current location'
+      : selectedOriginSuggestion?.fullText ?? trimmedOrigin;
+    const destinationLabel = selectedDestinationSuggestion?.fullText ?? trimmedDestination;
+
     setErrorMessage(null);
     setSaveError(null);
     setActiveField(null);
@@ -551,14 +564,56 @@ export default function MapScreen() {
     setSimulationIndex(0);
 
     try {
-      const nextRoutePlan = await buildRoutePlan({
-        origin,
-        destination,
-        originLabel: useCurrentLocation
-          ? 'Current location'
-          : selectedOriginSuggestion?.fullText ?? trimmedOrigin,
-        destinationLabel: selectedDestinationSuggestion?.fullText ?? trimmedDestination,
-      });
+      let nextRoutePlan: RoutePlan;
+
+      try {
+        nextRoutePlan = await buildRoutePlan({
+          origin,
+          destination,
+          originLabel,
+          destinationLabel,
+        });
+      } catch (error) {
+        const shouldRetryWithAddressFallback =
+          isPlaceIdNotFoundError(error) &&
+          ((!useCurrentLocation && Boolean(selectedOriginSuggestion?.placeId) && Boolean(trimmedOrigin)) ||
+            (Boolean(selectedDestinationSuggestion?.placeId) && Boolean(trimmedDestination)));
+
+        if (!shouldRetryWithAddressFallback) {
+          throw error;
+        }
+
+        const fallbackOrigin =
+          !useCurrentLocation && selectedOriginSuggestion?.placeId
+            ? {
+                type: 'address' as const,
+                address: trimmedOrigin,
+              }
+            : origin;
+        const fallbackDestination = selectedDestinationSuggestion?.placeId
+          ? {
+              type: 'address' as const,
+              address: trimmedDestination,
+            }
+          : destination;
+
+        nextRoutePlan = await buildRoutePlan({
+          origin: fallbackOrigin,
+          destination: fallbackDestination,
+          originLabel,
+          destinationLabel,
+        });
+
+        if (!useCurrentLocation && selectedOriginSuggestion?.placeId) {
+          setSelectedOriginSuggestion(null);
+          originSessionTokenRef.current = createAutocompleteSessionToken();
+        }
+
+        if (selectedDestinationSuggestion?.placeId) {
+          setSelectedDestinationSuggestion(null);
+          destinationSessionTokenRef.current = createAutocompleteSessionToken();
+        }
+      }
 
       setRoutePlan(nextRoutePlan);
       setSelectedRouteId(nextRoutePlan.options[0]?.id ?? null);
