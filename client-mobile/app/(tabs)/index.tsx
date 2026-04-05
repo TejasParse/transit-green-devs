@@ -35,6 +35,11 @@ const DEFAULT_REGION: Region = {
   latitudeDelta: 0.08,
   longitudeDelta: 0.08,
 };
+const MIN_LATITUDE_DELTA = 0.003;
+const MAX_LATITUDE_DELTA = 0.6;
+const MIN_LONGITUDE_DELTA = 0.003;
+const MAX_LONGITUDE_DELTA = 0.6;
+const ZOOM_FACTOR = 0.5;
 
 function buildRegion(points: { latitude: number; longitude: number }[]): Region {
   if (points.length === 0) {
@@ -80,25 +85,6 @@ function getRouteIcon(kind: RouteOption['kind']): ComponentProps<typeof Material
     case 'drive':
       return 'directions-car';
   }
-}
-
-function getOriginAlertMessage(
-  locationStatus: 'loading' | 'ready' | 'denied' | 'error',
-  useCurrentLocation: boolean
-) {
-  if (locationStatus === 'loading' && useCurrentLocation) {
-    return 'Checking your current location...';
-  }
-
-  if (locationStatus === 'denied') {
-    return 'Location permission is off. Enter a starting place manually or enable location access.';
-  }
-
-  if (locationStatus === 'error') {
-    return 'We could not read your live location. Enter a start place manually or try again.';
-  }
-
-  return null;
 }
 
 function getRouteModeLabel(kind: RouteOption['kind']) {
@@ -207,6 +193,7 @@ export default function MapScreen() {
 
   const mapRef = useRef<MapView | null>(null);
   const miniMapRef = useRef<MapView | null>(null);
+  const regionRef = useRef<Region>(DEFAULT_REGION);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tripStartedAtRef = useRef<string | null>(null);
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -412,10 +399,11 @@ export default function MapScreen() {
   const showOriginSuggestions = !useCurrentLocation && activeField === 'origin' && originInput.trim().length >= 2;
   const showDestinationSuggestions =
     activeField === 'destination' && destinationInput.trim().length >= 2;
+  const shouldCompactSearchPanel =
+    destinationInput.trim().length > 0 || selectedDestinationSuggestion != null || routePlan != null;
   const simulationProgress = Math.round(
     (simulationIndex / Math.max((simulationPath?.length ?? 1) - 1, 1)) * 100
   );
-  const originAlertMessage = getOriginAlertMessage(locationStatus, useCurrentLocation);
   const canUseCurrentLocation = locationStatus === 'ready' && Boolean(currentLocation);
 
   function clearBlurTimeout() {
@@ -725,6 +713,26 @@ export default function MapScreen() {
     tripStartedAtRef.current = null;
   }
 
+  function handleZoom(direction: 'in' | 'out') {
+    const currentRegion = regionRef.current;
+    const multiplier = direction === 'in' ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
+
+    const nextRegion: Region = {
+      ...currentRegion,
+      latitudeDelta: Math.min(
+        MAX_LATITUDE_DELTA,
+        Math.max(MIN_LATITUDE_DELTA, currentRegion.latitudeDelta * multiplier)
+      ),
+      longitudeDelta: Math.min(
+        MAX_LONGITUDE_DELTA,
+        Math.max(MIN_LONGITUDE_DELTA, currentRegion.longitudeDelta * multiplier)
+      ),
+    };
+
+    regionRef.current = nextRegion;
+    mapRef.current?.animateToRegion(nextRegion, 180);
+  }
+
   function renderSuggestionList(
     suggestions: AddressSuggestion[],
     isLoading: boolean,
@@ -824,7 +832,13 @@ export default function MapScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <View style={styles.container}>
-        <MapView ref={mapRef} style={StyleSheet.absoluteFill} initialRegion={DEFAULT_REGION}>
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFill}
+          initialRegion={DEFAULT_REGION}
+          onRegionChangeComplete={(region) => {
+            regionRef.current = region;
+          }}>
           {routePlan?.options.map((route) => {
             const isSelected = route.id === selectedRouteId;
 
@@ -881,6 +895,31 @@ export default function MapScreen() {
             </Marker>
           ) : null}
         </MapView>
+
+        <View pointerEvents="box-none" style={styles.zoomControls}>
+          <Pressable
+            onPress={() => handleZoom('in')}
+            style={[
+              styles.zoomButton,
+              {
+                backgroundColor: palette.card,
+                borderColor: palette.border,
+              },
+            ]}>
+            <MaterialIcons name="add" size={20} color={palette.text} />
+          </Pressable>
+          <Pressable
+            onPress={() => handleZoom('out')}
+            style={[
+              styles.zoomButton,
+              {
+                backgroundColor: palette.card,
+                borderColor: palette.border,
+              },
+            ]}>
+            <MaterialIcons name="remove" size={20} color={palette.text} />
+          </Pressable>
+        </View>
 
         <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
           {isSimulating && selectedRoute ? (
@@ -954,33 +993,19 @@ export default function MapScreen() {
               <View
                 style={[
                   styles.searchPanel,
+                  shouldCompactSearchPanel ? styles.searchPanelCompact : null,
                   {
                     backgroundColor: palette.card,
                     borderColor: palette.border,
                   },
                 ]}>
-                <View style={styles.headerRow}>
-                  <View style={{ flex: 1 }}>
-                    <ThemedText
-                      type="title"
-                      style={[
-                        styles.screenTitle,
-                        {
-                          color: palette.text,
-                        },
-                      ]}>
-                      Route Cleaner
-                    </ThemedText>
-                    <ThemedText style={{ color: palette.muted }}>
-                      Compare walk, bike, transit, and drive routes, then start navigation on the
-                      route you choose.
-                    </ThemedText>
+                {isFetchingRoutes ? (
+                  <View style={styles.compactHeaderRow}>
+                    <ActivityIndicator color={palette.accent} size="small" />
                   </View>
-                  {isFetchingRoutes ? <ActivityIndicator color={palette.accent} /> : null}
-                </View>
+                ) : null}
 
-                <View style={styles.inputGroup}>
-                  <ThemedText style={[styles.inputLabel, { color: palette.muted }]}>From</ThemedText>
+                <View style={[styles.inputGroup, shouldCompactSearchPanel ? styles.inputGroupCompact : null]}>
                   <View style={styles.originRow}>
                     <TextInput
                       value={originInput}
@@ -1004,10 +1029,11 @@ export default function MapScreen() {
                         setOriginInput(value);
                       }}
                       onBlur={scheduleSuggestionClose}
-                      placeholder="Enter a custom start"
+                      placeholder="Start"
                       placeholderTextColor={palette.muted}
                       style={[
                         styles.input,
+                        shouldCompactSearchPanel ? styles.inputCompact : null,
                         styles.originInput,
                         {
                           color: palette.text,
@@ -1027,6 +1053,7 @@ export default function MapScreen() {
                       }}
                       style={[
                         styles.locationButton,
+                        shouldCompactSearchPanel ? styles.locationButtonCompact : null,
                         {
                           backgroundColor: useCurrentLocation ? palette.accent : palette.cardSecondary,
                           borderColor: useCurrentLocation ? palette.accent : palette.border,
@@ -1038,13 +1065,6 @@ export default function MapScreen() {
                         size={18}
                         color={useCurrentLocation ? '#FFFFFF' : palette.text}
                       />
-                      <ThemedText
-                        style={{
-                          color: useCurrentLocation ? '#FFFFFF' : palette.text,
-                          fontWeight: '600',
-                        }}>
-                        Current
-                      </ThemedText>
                     </Pressable>
                   </View>
                   {showOriginSuggestions
@@ -1055,27 +1075,9 @@ export default function MapScreen() {
                         (suggestion) => selectSuggestion('origin', suggestion)
                       )
                     : null}
-                  {originAlertMessage ? (
-                    <View
-                      style={[
-                        styles.originAlert,
-                        {
-                          backgroundColor: colorScheme === 'dark' ? '#132019' : '#F3F8F1',
-                          borderColor: palette.border,
-                        },
-                      ]}>
-                      <MaterialIcons
-                        name={locationStatus === 'loading' ? 'my-location' : 'info-outline'}
-                        size={18}
-                        color={palette.accentAlt}
-                      />
-                      <ThemedText style={{ color: palette.text, flex: 1 }}>{originAlertMessage}</ThemedText>
-                    </View>
-                  ) : null}
                 </View>
 
-                <View style={styles.inputGroup}>
-                  <ThemedText style={[styles.inputLabel, { color: palette.muted }]}>To</ThemedText>
+                <View style={[styles.inputGroup, shouldCompactSearchPanel ? styles.inputGroupCompact : null]}>
                   <TextInput
                     value={destinationInput}
                     onFocus={() => {
@@ -1089,10 +1091,11 @@ export default function MapScreen() {
                       setDestinationInput(value);
                     }}
                     onBlur={scheduleSuggestionClose}
-                    placeholder="Enter your destination"
+                    placeholder="Destination"
                     placeholderTextColor={palette.muted}
                     style={[
                       styles.input,
+                      shouldCompactSearchPanel ? styles.inputCompact : null,
                       {
                         color: palette.text,
                         backgroundColor: palette.input,
@@ -1115,6 +1118,7 @@ export default function MapScreen() {
                   onPress={() => void handleFindRoutes()}
                   style={[
                     styles.primaryButton,
+                    shouldCompactSearchPanel ? styles.primaryButtonCompact : null,
                     {
                       backgroundColor: isFetchingRoutes || isSimulating ? '#7FA98E' : palette.accent,
                     },
@@ -1138,53 +1142,16 @@ export default function MapScreen() {
                 ) : null}
               </View>
 
-              <View
-                style={[
-                  styles.bottomSheet,
-                  {
-                    backgroundColor: palette.card,
-                    borderColor: palette.border,
-                  },
-                ]}>
-                {!routePlan ? (
-                  <View style={styles.emptyState}>
-                    <MaterialIcons name="route" size={28} color={palette.accentAlt} />
-                    <ThemedText type="subtitle" style={{ color: palette.text }}>
-                      Ready when you are
-                    </ThemedText>
-                    <ThemedText style={{ color: palette.muted, textAlign: 'center' }}>
-                      Search any trip to compare walking, cycling, public transit, and
-                      fuel-efficient driving routes from Google Maps.
-                    </ThemedText>
-                  </View>
-                ) : (
+              {routePlan ? (
+                <View
+                  style={[
+                    styles.bottomSheet,
+                    {
+                      backgroundColor: palette.card,
+                      borderColor: palette.border,
+                    },
+                  ]}>
                   <ScrollView contentContainerStyle={styles.bottomSheetContent} showsVerticalScrollIndicator={false}>
-                    <View style={styles.sheetHeader}>
-                      <View style={{ flex: 1 }}>
-                        <ThemedText type="subtitle" style={{ color: palette.text }}>
-                          Route comparison ready
-                        </ThemedText>
-                        <ThemedText style={{ color: palette.muted }}>
-                          Options are ordered from the lowest estimated carbon impact upward.
-                        </ThemedText>
-                      </View>
-                    </View>
-
-                    {routePlan.notices.slice(0, 2).map((notice) => (
-                      <View
-                        key={notice}
-                        style={[
-                          styles.noticeCard,
-                          {
-                            backgroundColor: colorScheme === 'dark' ? '#132019' : '#F3F8F1',
-                            borderColor: palette.border,
-                          },
-                        ]}>
-                        <MaterialIcons name="info-outline" size={18} color={palette.accentAlt} />
-                        <ThemedText style={{ color: palette.text, flex: 1 }}>{notice}</ThemedText>
-                      </View>
-                    ))}
-
                     {routePlan.options.map((route) => {
                       const isSelected = selectedRouteId === route.id;
 
@@ -1214,7 +1181,9 @@ export default function MapScreen() {
                               <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
                                 {route.title}
                               </ThemedText>
-                              <ThemedText style={{ color: palette.muted }}>{route.subtitle}</ThemedText>
+                              <ThemedText style={[styles.routeSubtitle, { color: palette.muted }]}>
+                                {route.subtitle}
+                              </ThemedText>
                             </View>
                             {isSelected ? (
                               <MaterialIcons name="check-circle" size={22} color={route.color} />
@@ -1231,7 +1200,7 @@ export default function MapScreen() {
                                     backgroundColor: `${route.color}18`,
                                   },
                                 ]}>
-                                <ThemedText style={{ color: route.color, fontWeight: '600' }}>{badge}</ThemedText>
+                                <ThemedText style={[styles.badgeText, { color: route.color }]}>{badge}</ThemedText>
                               </View>
                             ))}
                           </View>
@@ -1239,20 +1208,28 @@ export default function MapScreen() {
                           <View style={styles.metricRow}>
                             <View style={styles.metricCard}>
                               <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Time</ThemedText>
-                              <ThemedText style={{ color: palette.text }}>{formatDuration(route.durationSeconds)}</ThemedText>
+                              <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                                {formatDuration(route.durationSeconds)}
+                              </ThemedText>
                             </View>
                             <View style={styles.metricCard}>
                               <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Distance</ThemedText>
-                              <ThemedText style={{ color: palette.text }}>{formatDistance(route.distanceMeters)}</ThemedText>
+                              <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                                {formatDistance(route.distanceMeters)}
+                              </ThemedText>
                             </View>
                             <View style={styles.metricCard}>
                               <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>CO2</ThemedText>
-                              <ThemedText style={{ color: palette.text }}>{formatCo2(route.co2Kg)}</ThemedText>
+                              <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                                {formatCo2(route.co2Kg)}
+                              </ThemedText>
                             </View>
                           </View>
 
-                          <ThemedText style={{ color: palette.text }}>{route.summary}</ThemedText>
-                          <ThemedText style={{ color: palette.muted }}>
+                          <ThemedText style={[styles.routeBodyText, { color: palette.text }]}>
+                            {route.summary}
+                          </ThemedText>
+                          <ThemedText style={[styles.routeBodyText, { color: palette.muted }]}>
                             {route.kind === 'drive'
                               ? route.co2SavedKg > 0
                                 ? `Estimated to save ${formatCo2(route.co2SavedKg)} compared with another car route.`
@@ -1278,16 +1255,12 @@ export default function MapScreen() {
                               </ThemedText>
                             </Pressable>
                           ) : null}
-
-                          {isSelected && route.warnings[0] ? (
-                            <ThemedText style={{ color: palette.muted }}>{route.warnings[0]}</ThemedText>
-                          ) : null}
                         </Pressable>
                       );
                     })}
                   </ScrollView>
-                )}
-              </View>
+                </View>
+              ) : null}
             </>
           )}
         </View>
@@ -1373,7 +1346,7 @@ export default function MapScreen() {
                   <>
                     <ActivityIndicator color={palette.accent} />
                     <ThemedText style={{ color: palette.text, flex: 1 }}>
-                      Saving this trip to Postgres history...
+                      Saving this trip to your history...
                     </ThemedText>
                   </>
                 ) : saveError ? (
@@ -1417,6 +1390,14 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 10 },
     elevation: 8,
+  },
+  searchPanelCompact: {
+    alignSelf: 'center',
+    marginTop: 8,
+    padding: 14,
+    gap: 10,
+    width: '88%',
+    maxWidth: 380,
   },
   simulationHud: {
     marginHorizontal: 16,
@@ -1482,12 +1463,16 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
   },
-  screenTitle: {
-    fontSize: 28,
-    lineHeight: 30,
+  compactHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
   },
   inputGroup: {
     gap: 6,
+  },
+  inputGroupCompact: {
+    gap: 4,
   },
   originRow: {
     flexDirection: 'row',
@@ -1502,22 +1487,32 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontSize: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontSize: 14,
+  },
+  inputCompact: {
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    fontSize: 13,
   },
   originInput: {
     flex: 1,
   },
   locationButton: {
-    minHeight: 52,
+    minHeight: 48,
     borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 14,
+    borderRadius: 14,
+    width: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+  },
+  locationButtonCompact: {
+    minHeight: 44,
+    borderRadius: 14,
+    width: 44,
   },
   suggestionContainer: {
     borderWidth: 1,
@@ -1556,15 +1551,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingBottom: 12,
   },
-  originAlert: {
-    borderRadius: 14,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   primaryButton: {
     borderRadius: 16,
     paddingVertical: 14,
@@ -1572,6 +1558,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
+  },
+  primaryButtonCompact: {
+    borderRadius: 14,
+    paddingVertical: 12,
   },
   primaryButtonText: {
     color: '#FFFFFF',
@@ -1604,17 +1594,6 @@ const styles = StyleSheet.create({
     padding: 18,
     gap: 14,
   },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 30,
-    gap: 10,
-  },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
   progressChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1623,19 +1602,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
-  noticeCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    gap: 8,
-  },
   routeCard: {
     borderWidth: 1,
     borderRadius: 22,
-    padding: 16,
-    gap: 12,
+    padding: 14,
+    gap: 10,
   },
   routeHeader: {
     flexDirection: 'row',
@@ -1650,8 +1621,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   routeTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
+  },
+  routeSubtitle: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -1660,8 +1635,12 @@ const styles = StyleSheet.create({
   },
   badge: {
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  badgeText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   metricRow: {
     flexDirection: 'row',
@@ -1670,8 +1649,8 @@ const styles = StyleSheet.create({
   metricCard: {
     flex: 1,
     borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     backgroundColor: 'rgba(127, 127, 127, 0.08)',
     gap: 4,
   },
@@ -1680,6 +1659,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
+  },
+  metricValueSmall: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  routeBodyText: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   secondaryButton: {
     borderRadius: 16,
@@ -1706,6 +1693,25 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
+  },
+  zoomControls: {
+    position: 'absolute',
+    right: 16,
+    bottom: 96,
+    gap: 10,
+  },
+  zoomButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
   },
   modalBackdrop: {
     flex: 1,
