@@ -14,6 +14,10 @@ if (DATABASE_SSL) {
   poolConfig.ssl = {
     rejectUnauthorized: DATABASE_SSL_REJECT_UNAUTHORIZED,
   };
+
+  if (DATABASE_SSL_CA_PATH) {
+    poolConfig.ssl.ca = require('fs').readFileSync('./global-bundle.pem').toString();
+  }
 }
 
 const pool = new Pool(poolConfig);
