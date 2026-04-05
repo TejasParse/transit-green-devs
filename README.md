@@ -61,6 +61,32 @@ transit-green-devs/
 
 The frontend is an Expo app inside [`client-mobile`](./client-mobile).
 
+### Auth0 Setup
+
+The sign-in screen is [`client-mobile/app/sign-in.tsx`](./client-mobile/app/sign-in.tsx). It uses Expo AuthSession with this redirect path:
+
+- app scheme: `clientmobile`
+- auth callback path: `sign-in`
+
+Auth0 application setup requirements:
+
+- create a `Native` application in Auth0
+- set `Domain` in `client-mobile/.env` as `EXPO_PUBLIC_AUTH0_DOMAIN`
+- set the Auth0 application `Client ID` in `client-mobile/.env` as `EXPO_PUBLIC_AUTH0_CLIENT_ID`
+- if you protect an API in Auth0, optionally set `EXPO_PUBLIC_AUTH0_AUDIENCE`
+- if you want Universal Login to prefer a specific social or enterprise connection, optionally set `EXPO_PUBLIC_AUTH0_CONNECTION`
+
+Allowed URLs in the Auth0 application must include the exact redirect URI used by the app at runtime:
+
+- in Expo Go or local Expo development, use the exact `Redirect URI` shown on the sign-in screen, which is typically shaped like `exp://<your-local-ip>:8081/--/sign-in`
+- in a native build or development build using the configured app scheme, allow `clientmobile://sign-in`
+
+Recommended Auth0 dashboard values:
+
+- `Allowed Callback URLs`: include the exact Expo development redirect URI and `clientmobile://sign-in`
+- `Allowed Logout URLs`: include `clientmobile://sign-in`
+- `Allowed Web Origins`: not required for this native mobile flow unless you also add a web client
+
 ### App Shell and Navigation
 
 The application root is [`client-mobile/app/_layout.tsx`](./client-mobile/app/_layout.tsx).

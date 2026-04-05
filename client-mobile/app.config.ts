@@ -45,6 +45,10 @@ loadEnvFile(path.join(__dirname, '.env'));
 const googleMapsApiKey =
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_MAPS_API_KEY ?? '';
 const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? process.env.API_BASE_URL ?? '';
+const auth0Domain = process.env.EXPO_PUBLIC_AUTH0_DOMAIN ?? '';
+const auth0ClientId = process.env.EXPO_PUBLIC_AUTH0_CLIENT_ID ?? '';
+const auth0Audience = process.env.EXPO_PUBLIC_AUTH0_AUDIENCE ?? '';
+const auth0Connection = process.env.EXPO_PUBLIC_AUTH0_CONNECTION ?? '';
 
 const expoConfig = appJson.expo as ExpoConfig;
 
@@ -54,6 +58,10 @@ export default (): ExpoConfig => ({
     ...(expoConfig.extra ?? {}),
     googleMapsApiKey,
     apiBaseUrl,
+    auth0Domain,
+    auth0ClientId,
+    auth0Audience,
+    auth0Connection,
   },
   android: {
     ...expoConfig.android,

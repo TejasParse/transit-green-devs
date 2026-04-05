@@ -47,6 +47,11 @@ async function getProfileSummary(userId, db = pool) {
       SELECT
         profiles.id AS user_id,
         profiles.user_name AS display_name,
+        profiles.email,
+        profiles.age,
+        profiles.gender,
+        profiles.licence_no,
+        profiles.picture_url,
         profiles.total_points::INTEGER AS total_points_earned,
         profiles.carpool_cancellation_count::INTEGER AS carpool_cancellation_count,
         profiles.carpool_blocked,
@@ -127,6 +132,11 @@ async function getProfileSummary(userId, db = pool) {
   return {
     userId: row.user_id,
     displayName: row.display_name,
+    email: row.email,
+    age: row.age,
+    gender: row.gender,
+    licenceNo: row.licence_no,
+    pictureUrl: row.picture_url,
     totalPointsEarned,
     totalPointsSpent,
     totalPointsAvailable: Math.max(totalPointsEarned - totalPointsSpent, 0),

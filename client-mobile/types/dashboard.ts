@@ -30,6 +30,11 @@ export type TreeCatalogEntry = {
 export type DashboardSummary = {
   userId: number;
   displayName: string;
+  email: string;
+  age: number;
+  gender: string;
+  licenceNo: string | null;
+  pictureUrl: string | null;
   totalPointsEarned: number;
   totalPointsSpent: number;
   totalPointsAvailable: number;

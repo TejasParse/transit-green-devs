@@ -134,15 +134,17 @@ export default function ProfileScreen() {
   const {
     userId,
     displayName,
-    setDisplayName,
-    activeProfile,
-    availableProfiles,
-    loginWithUsername,
+    appProfile,
+    saveProfile,
     tripVersion,
     notifyTripSaved,
   } = useUserProfile();
   const [draftName, setDraftName] = useState(displayName);
-  const [loginName, setLoginName] = useState(displayName);
+  const [draftAge, setDraftAge] = useState('');
+  const [draftGender, setDraftGender] = useState('');
+  const [draftLicenceNo, setDraftLicenceNo] = useState('');
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<UserDashboard | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
@@ -158,9 +160,6 @@ export default function ProfileScreen() {
   const [carpoolActionError, setCarpoolActionError] = useState<string | null>(null);
   const [carpoolActionMessage, setCarpoolActionMessage] = useState<string | null>(null);
   const [carpoolActionKey, setCarpoolActionKey] = useState<string | null>(null);
-  const [loginMessage, setLoginMessage] = useState<string | null>(null);
-  const [loginError, setLoginError] = useState<string | null>(null);
-
   const palette =
     colorScheme === 'dark'
       ? {
@@ -246,21 +245,10 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     setDraftName(displayName);
-    setLoginName(displayName);
-  }, [displayName]);
-
-  function handleUsernameLogin() {
-    const result = loginWithUsername(loginName);
-
-    if (!result.ok) {
-      setLoginError(result.error);
-      setLoginMessage(null);
-      return;
-    }
-
-    setLoginError(null);
-    setLoginMessage(`Signed in as ${loginName.trim() || activeProfile.displayName}.`);
-  }
+    setDraftAge(appProfile?.age != null ? String(appProfile.age) : '');
+    setDraftGender(appProfile?.gender ?? '');
+    setDraftLicenceNo(appProfile?.licenceNo ?? '');
+  }, [appProfile, displayName]);
 
   useEffect(() => {
     if (!isFocused) {
@@ -349,7 +337,25 @@ export default function ProfileScreen() {
   const isForestFull = forest ? forest.totalTrees >= forestCapacity : false;
   const selectedTree =
     forest?.treeCatalog.find((treeOption) => treeOption.id === selectedTreeId) ?? null;
-  const displayNameForHeader = displayName || summary?.displayName || 'Campus Rider';
+  const displayNameForHeader = displayName || summary?.displayName || 'Transit Rider';
+
+  async function handleProfileSave() {
+    setProfileError(null);
+    setProfileMessage(null);
+
+    try {
+      await saveProfile({
+        displayName: draftName,
+        age: Number(draftAge),
+        gender: draftGender,
+        licenceNo: draftLicenceNo || null,
+      });
+      setProfileMessage('Profile updated everywhere in the app.');
+      await refreshDashboardSnapshot();
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Unable to update profile.');
+    }
+  }
 
   function openPlantModal() {
     if (!forest) {
@@ -1345,91 +1351,65 @@ export default function ProfileScreen() {
 
             <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
               <ThemedText type="subtitle" style={{ color: palette.text }}>
-                Username Login
+                Account Details
               </ThemedText>
               <ThemedText style={{ color: palette.muted }}>
-                Enter a known username and this simulator will switch to that profile.
+                Your Auth0 identity is linked to this app profile and used throughout the map,
+                leaderboard, and dashboard.
               </ThemedText>
-
-              <TextInput
-                value={loginName}
-                onChangeText={setLoginName}
-                placeholder="Enter username"
-                placeholderTextColor={palette.muted}
-                autoCapitalize="words"
-                autoCorrect={false}
-                style={[
-                  styles.input,
-                  {
-                    color: palette.text,
-                    backgroundColor: palette.input,
-                    borderColor: palette.border,
-                  },
-                ]}
-              />
-              <Pressable
-                onPress={handleUsernameLogin}
-                style={[styles.saveButton, { backgroundColor: palette.accent }]}>
-                <MaterialIcons name="login" size={20} color="#FFFFFF" />
-                <ThemedText style={styles.saveButtonText}>Switch with username</ThemedText>
-              </Pressable>
-
-              {loginMessage ? (
-                <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
-                  <MaterialIcons name="check-circle-outline" size={20} color={palette.accent} />
-                  <ThemedText style={{ color: palette.text, flex: 1 }}>{loginMessage}</ThemedText>
-                </View>
-              ) : null}
-
-              {loginError ? (
-                <View style={[styles.messageCard, { backgroundColor: palette.errorSurface, borderColor: palette.border }]}>
-                  <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
-                  <ThemedText style={{ color: palette.text, flex: 1 }}>{loginError}</ThemedText>
-                </View>
-              ) : null}
-
-              <View style={styles.userNameList}>
-                {availableProfiles.map((profile) => {
-                  const isSelected = profile.userId === userId;
-
-                  return (
-                    <Pressable
-                      key={profile.userId}
-                      onPress={() => setLoginName(profile.displayName)}
-                      style={[
-                        styles.userNameChip,
-                        {
-                          backgroundColor: isSelected ? palette.accentSoft : palette.input,
-                          borderColor: isSelected ? palette.accent : palette.border,
-                        },
-                      ]}>
-                      <ThemedText
-                        style={{
-                          color: isSelected ? palette.accent : palette.text,
-                          fontWeight: '700',
-                        }}>
-                        {profile.displayName}
-                      </ThemedText>
-                      <ThemedText style={{ color: palette.muted, flex: 1 }}>
-                        {profile.canDrive ? 'Driver-ready' : 'Rider-ready'}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
+              <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+                <MaterialIcons name="alternate-email" size={20} color={palette.accent} />
+                <ThemedText style={{ color: palette.text, flex: 1 }}>
+                  {summary?.email ?? appProfile?.email ?? 'No email available'}
+                </ThemedText>
               </View>
-            </View>
-
-            <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-              <ThemedText type="subtitle" style={{ color: palette.text }}>
-                Rider Details
-              </ThemedText>
-              <ThemedText style={{ color: palette.muted }}>
-                This name is used for newly saved trips and the leaderboard for {activeProfile.displayName}.
-              </ThemedText>
               <TextInput
                 value={draftName}
                 onChangeText={setDraftName}
-                placeholder="Set your rider name"
+                placeholder="Display name"
+                placeholderTextColor={palette.muted}
+                style={[
+                  styles.input,
+                  {
+                    color: palette.text,
+                    backgroundColor: palette.input,
+                    borderColor: palette.border,
+                  },
+                ]}
+              />
+              <TextInput
+                value={draftAge}
+                onChangeText={setDraftAge}
+                placeholder="Age"
+                placeholderTextColor={palette.muted}
+                keyboardType="number-pad"
+                style={[
+                  styles.input,
+                  {
+                    color: palette.text,
+                    backgroundColor: palette.input,
+                    borderColor: palette.border,
+                  },
+                ]}
+              />
+              <TextInput
+                value={draftGender}
+                onChangeText={setDraftGender}
+                placeholder="Gender"
+                placeholderTextColor={palette.muted}
+                style={[
+                  styles.input,
+                  {
+                    color: palette.text,
+                    backgroundColor: palette.input,
+                    borderColor: palette.border,
+                  },
+                ]}
+              />
+              <TextInput
+                value={draftLicenceNo}
+                onChangeText={setDraftLicenceNo}
+                placeholder="Licence number"
                 placeholderTextColor={palette.muted}
                 style={[
                   styles.input,
@@ -1441,11 +1421,25 @@ export default function ProfileScreen() {
                 ]}
               />
               <Pressable
-                onPress={() => setDisplayName(draftName)}
+                onPress={() => {
+                  void handleProfileSave();
+                }}
                 style={[styles.saveButton, { backgroundColor: palette.accent }]}>
                 <MaterialIcons name="check" size={20} color="#FFFFFF" />
-                <ThemedText style={styles.saveButtonText}>Use this rider name</ThemedText>
+                <ThemedText style={styles.saveButtonText}>Save profile</ThemedText>
               </Pressable>
+              {profileMessage ? (
+                <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+                  <MaterialIcons name="check-circle-outline" size={20} color={palette.accent} />
+                  <ThemedText style={{ color: palette.text, flex: 1 }}>{profileMessage}</ThemedText>
+                </View>
+              ) : null}
+              {profileError ? (
+                <View style={[styles.messageCard, { backgroundColor: palette.errorSurface, borderColor: palette.border }]}>
+                  <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
+                  <ThemedText style={{ color: palette.text, flex: 1 }}>{profileError}</ThemedText>
+                </View>
+              ) : null}
             </View>
 
             <View style={[styles.roadmapCard, { backgroundColor: palette.card, borderColor: palette.border }]}>

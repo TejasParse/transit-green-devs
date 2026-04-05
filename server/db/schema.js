@@ -64,6 +64,9 @@ async function ensureSchema() {
       age INTEGER NOT NULL CHECK (age > 0),
       gender TEXT NOT NULL,
       licence_no TEXT UNIQUE,
+      auth_provider TEXT,
+      auth_subject TEXT UNIQUE,
+      picture_url TEXT,
       carpool_rating_avg NUMERIC(3, 2) NOT NULL DEFAULT 5.00,
       carpool_rating_count INTEGER NOT NULL DEFAULT 0 CHECK (carpool_rating_count >= 0),
       carpool_cancellation_count INTEGER NOT NULL DEFAULT 0 CHECK (carpool_cancellation_count >= 0),
@@ -73,6 +76,9 @@ async function ensureSchema() {
 
   await pool.query(`
     ALTER TABLE profiles
+    ADD COLUMN IF NOT EXISTS auth_provider TEXT,
+    ADD COLUMN IF NOT EXISTS auth_subject TEXT UNIQUE,
+    ADD COLUMN IF NOT EXISTS picture_url TEXT,
     ADD COLUMN IF NOT EXISTS carpool_rating_avg NUMERIC(3, 2) NOT NULL DEFAULT 5.00,
     ADD COLUMN IF NOT EXISTS carpool_rating_count INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS carpool_cancellation_count INTEGER NOT NULL DEFAULT 0,

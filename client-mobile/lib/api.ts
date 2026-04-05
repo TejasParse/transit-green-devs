@@ -1,5 +1,11 @@
 import Constants from 'expo-constants';
 
+import {
+  AppProfile,
+  ProfileSessionPayload,
+  ProfileSessionResponse,
+  UpdateProfilePayload,
+} from '@/types/profile';
 import { PlantTreePayload, UserDashboard } from '@/types/dashboard';
 import {
   CarpoolRequestRecord,
@@ -77,6 +83,22 @@ export function fetchLeaderboard(userId?: number) {
   const path = query ? `/api/leaderboard?${query}` : '/api/leaderboard';
 
   return request<LeaderboardSnapshot>(path);
+}
+
+export function createProfileSession(payload: ProfileSessionPayload) {
+  return request<ProfileSessionResponse>('/api/profile/session', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateProfile(payload: UpdateProfilePayload) {
+  const { userId, ...body } = payload;
+
+  return request<AppProfile>(`/api/profile/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
 }
 
 export function fetchUserTrips(userId: number) {
