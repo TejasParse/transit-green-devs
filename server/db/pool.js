@@ -49,9 +49,7 @@ const poolConfig = DATABASE_USE_IAM_AUTH
           username: DATABASE_USER,
         });
 
-        return signer.getAuthToken({
-          username: DATABASE_USER,
-        });
+        return signer.getAuthToken({});
       },
       ssl: getSslConfig(),
     }
