@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 
 import { PlantTreePayload, UserDashboard } from '@/types/dashboard';
-import { LeaderboardEntry, TripPayload, TripRecord } from '@/types/trips';
+import { LeaderboardSnapshot, TripPayload, TripRecord } from '@/types/trips';
 
 type ExpoConstantsShape = {
   expoConfig?: {
@@ -55,8 +55,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function fetchLeaderboard() {
-  return request<LeaderboardEntry[]>('/api/leaderboard');
+export function fetchLeaderboard(userId?: number) {
+  const searchParams = new URLSearchParams();
+
+  if (userId != null) {
+    searchParams.set('userId', String(userId));
+  }
+
+  const query = searchParams.toString();
+  const path = query ? `/api/leaderboard?${query}` : '/api/leaderboard';
+
+  return request<LeaderboardSnapshot>(path);
 }
 
 export function fetchUserTrips(userId: number) {

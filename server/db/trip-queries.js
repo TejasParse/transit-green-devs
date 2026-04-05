@@ -1,5 +1,44 @@
 const { pool } = require('./pool');
 
+const leaderboardAggregatesCte = `
+  WITH aggregated AS (
+    SELECT
+      profiles.id AS user_id,
+      profiles.user_name AS display_name,
+      COUNT(trips.id)::INTEGER AS total_trips,
+      COALESCE(SUM(trips.distance_meters), 0)::INTEGER AS total_distance_meters,
+      COALESCE(SUM(trips.co2_kg), 0)::FLOAT8 AS total_co2_kg,
+      COALESCE(SUM(trips.co2_saved_kg), 0)::FLOAT8 AS total_co2_saved_kg,
+      MAX(trips.completed_at) AS last_trip_at
+    FROM profiles
+    INNER JOIN trips ON trips.user_id = profiles.id
+    WHERE trips.status = 'ended'
+    GROUP BY profiles.id, profiles.user_name
+  )
+`;
+
+const leaderboardRankingClause = `
+  , ranked AS (
+    SELECT
+      aggregated.*,
+      ROW_NUMBER() OVER (
+        ORDER BY
+          aggregated.total_co2_saved_kg DESC,
+          aggregated.total_trips DESC,
+          aggregated.last_trip_at DESC,
+          aggregated.user_id ASC
+      ) AS rank,
+      LAG(aggregated.total_co2_saved_kg) OVER (
+        ORDER BY
+          aggregated.total_co2_saved_kg DESC,
+          aggregated.total_trips DESC,
+          aggregated.last_trip_at DESC,
+          aggregated.user_id ASC
+      ) AS previous_co2_saved_kg
+    FROM aggregated
+  )
+`;
+
 function mapTripRow(row) {
   return {
     id: row.id,
@@ -20,6 +59,25 @@ function mapTripRow(row) {
     pathPoints: row.path_points,
     metadata: row.metadata,
     createdAt: row.created_at,
+  };
+}
+
+function mapLeaderboardRow(row) {
+  const totalCo2SavedKg = Number(row.total_co2_saved_kg);
+  const previousCo2SavedKg =
+    row.previous_co2_saved_kg == null ? null : Number(row.previous_co2_saved_kg);
+
+  return {
+    rank: row.rank,
+    userId: row.user_id,
+    displayName: row.display_name,
+    totalTrips: row.total_trips,
+    totalDistanceMeters: row.total_distance_meters,
+    totalCo2Kg: Number(row.total_co2_kg),
+    totalCo2SavedKg,
+    co2GapToNextRankKg:
+      previousCo2SavedKg == null ? null : Number((previousCo2SavedKg - totalCo2SavedKg).toFixed(3)),
+    lastTripAt: row.last_trip_at,
   };
 }
 
@@ -45,33 +103,83 @@ async function getTripsByUserId(userId) {
   return result.rows.map(mapTripRow);
 }
 
-async function getLeaderboardEntries() {
-  const result = await pool.query(`
+async function getLeaderboardEntries(options = {}) {
+  const { userId = null, limit = 25 } = options;
+
+  const summaryResult = await pool.query(`
+    ${leaderboardAggregatesCte}
     SELECT
-      profiles.id AS user_id,
-      profiles.user_name AS display_name,
-      COUNT(trips.id)::INTEGER AS total_trips,
-      COALESCE(SUM(trips.distance_meters), 0)::INTEGER AS total_distance_meters,
-      COALESCE(SUM(trips.co2_kg), 0)::FLOAT8 AS total_co2_kg,
-      COALESCE(SUM(trips.co2_saved_kg), 0)::FLOAT8 AS total_co2_saved_kg,
-      MAX(trips.completed_at) AS last_trip_at
-    FROM profiles
-    INNER JOIN trips ON trips.user_id = profiles.id
-    WHERE trips.status = 'ended'
-    GROUP BY profiles.id, profiles.user_name
-    ORDER BY total_co2_saved_kg DESC, total_trips DESC, last_trip_at DESC
-    LIMIT 25
+      COUNT(*)::INTEGER AS active_riders,
+      COALESCE(SUM(total_trips), 0)::INTEGER AS total_trips,
+      COALESCE(SUM(total_distance_meters), 0)::INTEGER AS total_distance_meters,
+      COALESCE(SUM(total_co2_kg), 0)::FLOAT8 AS total_co2_kg,
+      COALESCE(SUM(total_co2_saved_kg), 0)::FLOAT8 AS total_co2_saved_kg
+    FROM aggregated
   `);
 
-  return result.rows.map((row) => ({
-    userId: row.user_id,
-    displayName: row.display_name,
-    totalTrips: row.total_trips,
-    totalDistanceMeters: row.total_distance_meters,
-    totalCo2Kg: Number(row.total_co2_kg),
-    totalCo2SavedKg: Number(row.total_co2_saved_kg),
-    lastTripAt: row.last_trip_at,
-  }));
+  const entriesResult = await pool.query(
+    `
+      ${leaderboardAggregatesCte}
+      ${leaderboardRankingClause}
+      SELECT
+        rank,
+        user_id,
+        display_name,
+        total_trips,
+        total_distance_meters,
+        total_co2_kg,
+        total_co2_saved_kg,
+        previous_co2_saved_kg,
+        last_trip_at
+      FROM ranked
+      ORDER BY rank
+      LIMIT $1
+    `,
+    [limit]
+  );
+
+  const summaryRow = summaryResult.rows[0];
+
+  const leaderboard = {
+    summary: {
+      activeRiders: summaryRow.active_riders,
+      totalTrips: summaryRow.total_trips,
+      totalDistanceMeters: summaryRow.total_distance_meters,
+      totalCo2Kg: Number(summaryRow.total_co2_kg),
+      totalCo2SavedKg: Number(summaryRow.total_co2_saved_kg),
+    },
+    entries: entriesResult.rows.map(mapLeaderboardRow),
+    currentUser: null,
+  };
+
+  if (userId != null) {
+    const userResult = await pool.query(
+      `
+        ${leaderboardAggregatesCte}
+        ${leaderboardRankingClause}
+        SELECT
+          rank,
+          user_id,
+          display_name,
+          total_trips,
+          total_distance_meters,
+          total_co2_kg,
+          total_co2_saved_kg,
+          previous_co2_saved_kg,
+          last_trip_at
+        FROM ranked
+        WHERE user_id = $1
+        LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (userResult.rows[0]) {
+      leaderboard.currentUser = mapLeaderboardRow(userResult.rows[0]);
+    }
+  }
+
+  return leaderboard;
 }
 
 async function createTripRecord(trip) {
