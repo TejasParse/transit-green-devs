@@ -41,15 +41,27 @@ loadEnvFile(path.join(__dirname, '..', '.env'));
 const PORT = Number(process.env.PORT || 3001);
 const DATABASE_URL =
   process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/innovationhacks';
+const DATABASE_USE_IAM_AUTH = process.env.DATABASE_USE_IAM_AUTH === 'true';
+const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+const DATABASE_HOST = process.env.DATABASE_HOST || '';
+const DATABASE_PORT = Number(process.env.DATABASE_PORT || 5432);
+const DATABASE_NAME = process.env.DATABASE_NAME || '';
+const DATABASE_USER = process.env.DATABASE_USER || '';
 const DATABASE_SSL = process.env.DATABASE_SSL === 'true';
 const DATABASE_SSL_REJECT_UNAUTHORIZED =
   process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false';
 const DATABASE_SSL_CA_PATH = process.env.DATABASE_SSL_CA_PATH || '';
 
 module.exports = {
+  AWS_REGION,
+  DATABASE_HOST,
+  DATABASE_NAME,
   DATABASE_URL,
   DATABASE_SSL,
   DATABASE_SSL_CA_PATH,
   DATABASE_SSL_REJECT_UNAUTHORIZED,
+  DATABASE_PORT,
+  DATABASE_USE_IAM_AUTH,
+  DATABASE_USER,
   PORT,
 };
