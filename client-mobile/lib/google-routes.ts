@@ -95,6 +95,39 @@ function getGoogleMapsApiKey() {
   return apiKey;
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return typeof error === 'string' ? error : 'Unknown error';
+}
+
+function parseGoogleErrorText(errorText: string) {
+  if (!errorText) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(errorText) as {
+      error?: {
+        message?: string;
+        status?: string;
+      };
+    };
+    const status = parsed.error?.status?.trim();
+    const message = parsed.error?.message?.trim();
+
+    if (status && message) {
+      return `${status}: ${message}`;
+    }
+
+    return message || errorText;
+  } catch {
+    return errorText;
+  }
+}
+
 function toWaypoint(waypoint: WaypointInput): GoogleWaypoint {
   if (waypoint.type === 'placeId') {
     return { placeId: waypoint.placeId };
@@ -295,7 +328,9 @@ async function fetchRoutesForMode(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(errorText || `Google Routes API failed for ${kind} navigation.`);
+    throw new Error(
+      parseGoogleErrorText(errorText) || `Google Routes API failed for ${kind} navigation.`
+    );
   }
 
   const data = (await response.json()) as GoogleRoutesResponse;
@@ -463,6 +498,7 @@ export async function buildRoutePlan({
   destinationLabel,
 }: BuildRoutePlanParams): Promise<RoutePlan> {
   const notices: string[] = [];
+  const modeErrors = new Map<RouteKind, string>();
   const settledResults = await Promise.allSettled(
     ROUTE_PRIORITY.map((kind) => fetchRoutesForMode(kind, origin, destination))
   );
@@ -482,21 +518,28 @@ export async function buildRoutePlan({
       return;
     }
 
+    modeErrors.set(kind, getErrorMessage(result.reason));
+
     if (kind !== 'drive') {
       notices.push(`${getModeLabel(kind)} route could not be loaded right now.`);
     }
   });
 
   const drivingRoutes = modeResults.get('drive') ?? [];
+  const driveErrorMessage = modeErrors.get('drive');
 
   if (drivingRoutes.length === 0) {
-    throw new Error('Google Maps did not return a drivable route for this trip.');
+    if (driveErrorMessage) {
+      throw new Error(`Driving route request failed: ${driveErrorMessage}`);
+    }
+
+    throw new Error('Google Maps did not return any driving routes for this trip.');
   }
 
   const preferredDriveRoute = choosePreferredRoute('drive', drivingRoutes);
 
   if (!preferredDriveRoute) {
-    throw new Error('Google Maps did not return a drivable route for this trip.');
+    throw new Error('Google Maps returned driving data, but no usable driving route could be derived.');
   }
 
   const driveReferenceCo2Kg = estimateDriveCo2Kg(preferredDriveRoute);

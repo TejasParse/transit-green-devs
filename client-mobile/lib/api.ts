@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 
+import { PlantTreePayload, UserDashboard } from '@/types/dashboard';
 import { LeaderboardEntry, TripPayload, TripRecord } from '@/types/trips';
 
 type ExpoConstantsShape = {
@@ -61,6 +62,18 @@ export function fetchLeaderboard() {
 export function fetchUserTrips(userId: number) {
   const searchParams = new URLSearchParams({ userId: String(userId) });
   return request<TripRecord[]>(`/api/trips?${searchParams.toString()}`);
+}
+
+export function fetchUserDashboard(userId: number) {
+  const searchParams = new URLSearchParams({ userId: String(userId) });
+  return request<UserDashboard>(`/api/dashboard?${searchParams.toString()}`);
+}
+
+export function plantForestTree(payload: PlantTreePayload) {
+  return request<UserDashboard>('/api/forest/trees', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createTrip(payload: TripPayload) {

@@ -1,5 +1,6 @@
 const express = require('express');
 
+const dashboardRoutes = require('./routes/dashboard-routes');
 const healthRoutes = require('./routes/health-routes');
 const tripRoutes = require('./routes/trip-routes');
 const { errorHandler } = require('./middleware/error-handler');
@@ -21,6 +22,7 @@ app.use((req, res, next) => {
 });
 
 app.use(healthRoutes);
+app.use(dashboardRoutes);
 app.use(tripRoutes);
 app.use(errorHandler);
 
