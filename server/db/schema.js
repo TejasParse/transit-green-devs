@@ -25,6 +25,7 @@ const RECURRENCE_PATTERNS = ['none', 'daily', 'weekdays'];
 async function resetSchema() {
   await pool.query(`
     DROP TABLE IF EXISTS forest_trees;
+    DROP TABLE IF EXISTS eco_destinations;
     DROP TABLE IF EXISTS trip_users;
     DROP TABLE IF EXISTS carpool_requests;
     DROP TABLE IF EXISTS trips;
@@ -51,6 +52,36 @@ async function ensureSchema() {
       co2_emissions_g_per_km INTEGER NOT NULL,
       capacity INTEGER NOT NULL CHECK (capacity BETWEEN 4 AND 6),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS eco_destinations (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      address TEXT NOT NULL,
+      features JSONB NOT NULL DEFAULT '[]'::jsonb,
+      latitude NUMERIC(10, 6) NOT NULL,
+      longitude NUMERIC(10, 6) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE eco_destinations
+    DROP CONSTRAINT IF EXISTS eco_destinations_category_check
+  `);
+
+  await pool.query(`
+    ALTER TABLE eco_destinations
+    ADD CONSTRAINT eco_destinations_category_check
+    CHECK (
+      category IN (
+        'sustainable_ev_hubs',
+        'reuse_donation_center',
+        'recycling_specialized_waste_dropoff'
+      )
     )
   `);
 
@@ -248,6 +279,11 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, grid_x, grid_y)
     )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS eco_destinations_category_idx
+    ON eco_destinations (category, name)
   `);
 
   await pool.query(`
