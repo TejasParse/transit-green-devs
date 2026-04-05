@@ -1,6 +1,6 @@
-# Transit Green
+# Ride Green
 
-Transit Green is a mobile-first sustainability app that helps users choose lower-emission travel and share rides through live carpool coordination.
+Ride Green is a mobile-first sustainability app that helps users choose lower-emission travel and share rides through live carpool coordination.
 
 ## What We Built
 
@@ -15,7 +15,7 @@ The product is designed for demo use with seeded profiles so two devices can act
 ## Why We Built It
 
 Daily commute decisions are usually optimized for speed, not sustainability.
-Transit Green makes the lower-carbon option visible at decision time and adds a practical carpool flow so fewer single-occupancy car trips are needed.
+Ride Green makes the lower-carbon option visible at decision time and adds a practical carpool flow so fewer single-occupancy car trips are needed.
 
 ## Key Features
 

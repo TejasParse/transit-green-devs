@@ -1,6 +1,6 @@
 # Client Mobile
 
-This directory contains the Expo/React Native frontend for Transit Green Devs.
+This directory contains the Expo/React Native frontend for Ride Green Devs.
 
 For the full project architecture, backend explanation, setup guide, and feature walkthrough, see the repository README:
 
