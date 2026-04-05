@@ -41,8 +41,13 @@ loadEnvFile(path.join(__dirname, '..', '.env'));
 const PORT = Number(process.env.PORT || 3001);
 const DATABASE_URL =
   process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/innovationhacks';
+const DATABASE_SSL = process.env.DATABASE_SSL === 'true';
+const DATABASE_SSL_REJECT_UNAUTHORIZED =
+  process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false';
 
 module.exports = {
   DATABASE_URL,
+  DATABASE_SSL,
+  DATABASE_SSL_REJECT_UNAUTHORIZED,
   PORT,
 };
