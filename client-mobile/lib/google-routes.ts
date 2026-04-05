@@ -388,7 +388,7 @@ function choosePreferredRoute(kind: Exclude<RouteKind, 'carpool'>, routes: Googl
   });
 }
 
-function getModeBadges(kind: RouteKind, driveReferenceCo2Kg: number, driveAlternativeCo2Kg: number | null) {
+function getModeBadges(kind: RouteKind, fuelEfficientDrive: boolean) {
   switch (kind) {
     case 'walk':
       return ['0 kg CO2', 'Lowest carbon'];
@@ -399,9 +399,7 @@ function getModeBadges(kind: RouteKind, driveReferenceCo2Kg: number, driveAltern
     case 'carpool':
       return ['Shared ride', 'Seat-by-seat impact'];
     case 'drive':
-      return driveAlternativeCo2Kg && driveAlternativeCo2Kg > driveReferenceCo2Kg
-        ? ['Fuel-efficient', 'Car navigation']
-        : ['Car navigation'];
+      return fuelEfficientDrive ? ['Fuel-efficient', 'Solo drive'] : ['Solo drive'];
   }
 }
 
@@ -464,12 +462,11 @@ function getRouteCopy(kind: RouteKind, fuelEfficientDrive: boolean) {
       };
     case 'drive':
       return {
-        title: 'Fuel-efficient drive',
+        title: 'Drive',
         subtitle: fuelEfficientDrive
-          ? 'Google selected the most carbon-efficient car route'
+          ? 'Fuel-efficient car route from Google Maps'
           : 'Best available driving route from Google Maps',
-        fallbackSummary:
-          'Turn-by-turn car simulation on the lowest-emission driving route Google returned.',
+        fallbackSummary: 'Turn-by-turn car navigation using the best Google Maps driving route.',
       };
   }
 }
@@ -510,7 +507,7 @@ function buildRouteOption(
     start,
     end,
     color: ROUTE_COLORS[kind],
-    badges: getModeBadges(kind, driveReferenceCo2Kg, driveAlternativeCo2Kg),
+    badges: getModeBadges(kind, fuelEfficientDrive),
     warnings: buildWarnings(),
   };
 }
@@ -609,7 +606,7 @@ export async function buildRoutePlan({
   if (!fuelEfficientDrive) {
     notices.push('Google returned the best available driving route for this trip.');
   } else {
-    notices.push('Drive navigation uses the fuel-efficient car route returned by Google Maps.');
+    notices.push('Drive uses the fuel-efficient car route returned by Google Maps when available.');
   }
 
   if (alternativeDriveCo2Kg && alternativeDriveCo2Kg > driveReferenceCo2Kg) {
