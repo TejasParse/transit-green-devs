@@ -100,6 +100,19 @@ function getRouteModeLabel(kind: RouteOption['kind']) {
   }
 }
 
+function getRouteTabLabel(kind: RouteOption['kind']) {
+  switch (kind) {
+    case 'walk':
+      return 'Walk';
+    case 'bike':
+      return 'Cycle';
+    case 'transit':
+      return 'Transit';
+    case 'drive':
+      return 'Car';
+  }
+}
+
 function getRouteStartLabel(kind: RouteOption['kind'], isSimulating: boolean) {
   if (isSimulating) {
     switch (kind) {
@@ -1152,112 +1165,151 @@ export default function MapScreen() {
                     },
                   ]}>
                   <ScrollView contentContainerStyle={styles.bottomSheetContent} showsVerticalScrollIndicator={false}>
-                    {routePlan.options.map((route) => {
-                      const isSelected = selectedRouteId === route.id;
+                    <View
+                      style={[
+                        styles.modeTabs,
+                        {
+                          backgroundColor: palette.cardSecondary,
+                          borderColor: palette.border,
+                        },
+                      ]}>
+                      {routePlan.options.map((route) => {
+                        const isSelected = selectedRouteId === route.id;
 
-                      return (
+                        return (
+                          <Pressable
+                            key={route.id}
+                            disabled={isSimulating}
+                            onPress={() => setSelectedRouteId(route.id)}
+                            style={[
+                              styles.modeTab,
+                              isSelected
+                                ? {
+                                    backgroundColor: route.color,
+                                    borderColor: route.color,
+                                  }
+                                : {
+                                    backgroundColor: 'transparent',
+                                    borderColor: 'transparent',
+                                  },
+                            ]}>
+                            <MaterialIcons
+                              name={getRouteIcon(route.kind)}
+                              size={16}
+                              color={isSelected ? '#FFFFFF' : route.color}
+                            />
+                            <ThemedText
+                              style={[
+                                styles.modeTabText,
+                                { color: isSelected ? '#FFFFFF' : palette.text },
+                              ]}>
+                              {getRouteTabLabel(route.kind)}
+                            </ThemedText>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    {selectedRoute ? (
+                      <View
+                        style={[
+                          styles.routeCard,
+                          {
+                            backgroundColor: palette.card,
+                            borderColor: selectedRoute.color,
+                          },
+                        ]}>
+                        <View style={styles.routeHeader}>
+                          <View
+                            style={[
+                              styles.routeIcon,
+                              {
+                                backgroundColor: `${selectedRoute.color}20`,
+                              },
+                            ]}>
+                            <MaterialIcons
+                              name={getRouteIcon(selectedRoute.kind)}
+                              size={22}
+                              color={selectedRoute.color}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
+                              {selectedRoute.title}
+                            </ThemedText>
+                            <ThemedText style={[styles.routeSubtitle, { color: palette.muted }]}>
+                              {selectedRoute.subtitle}
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        <View style={styles.badgeRow}>
+                          {selectedRoute.badges.map((badge) => (
+                            <View
+                              key={`${selectedRoute.id}-${badge}`}
+                              style={[
+                                styles.badge,
+                                {
+                                  backgroundColor: `${selectedRoute.color}18`,
+                                },
+                              ]}>
+                              <ThemedText style={[styles.badgeText, { color: selectedRoute.color }]}>
+                                {badge}
+                              </ThemedText>
+                            </View>
+                          ))}
+                        </View>
+
+                        <View style={styles.metricRow}>
+                          <View style={styles.metricCard}>
+                            <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Time</ThemedText>
+                            <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                              {formatDuration(selectedRoute.durationSeconds)}
+                            </ThemedText>
+                          </View>
+                          <View style={styles.metricCard}>
+                            <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Distance</ThemedText>
+                            <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                              {formatDistance(selectedRoute.distanceMeters)}
+                            </ThemedText>
+                          </View>
+                          <View style={styles.metricCard}>
+                            <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>CO2</ThemedText>
+                            <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                              {formatCo2(selectedRoute.co2Kg)}
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        <ThemedText style={[styles.routeBodyText, { color: palette.text }]}>
+                          {selectedRoute.summary}
+                        </ThemedText>
+                        <ThemedText style={[styles.routeBodyText, { color: palette.muted }]}>
+                          {selectedRoute.kind === 'drive'
+                            ? selectedRoute.co2SavedKg > 0
+                              ? `Estimated to save ${formatCo2(selectedRoute.co2SavedKg)} compared with another car route.`
+                              : 'Estimated emissions for the selected car route.'
+                            : selectedRoute.co2SavedKg > 0
+                              ? `Estimated to save ${formatCo2(selectedRoute.co2SavedKg)} compared with the fuel-efficient drive option.`
+                              : 'Estimated emissions for this route type.'}
+                        </ThemedText>
+
                         <Pressable
-                          key={route.id}
                           disabled={isSimulating}
-                          onPress={() => setSelectedRouteId(route.id)}
+                          onPress={handleStartSimulation}
                           style={[
-                            styles.routeCard,
+                            styles.secondaryButton,
                             {
-                              backgroundColor: isSelected ? palette.cardSecondary : palette.card,
-                              borderColor: isSelected ? route.color : palette.border,
+                              backgroundColor: selectedRoute.color,
                             },
                           ]}>
-                          <View style={styles.routeHeader}>
-                            <View
-                              style={[
-                                styles.routeIcon,
-                                {
-                                  backgroundColor: `${route.color}20`,
-                                },
-                              ]}>
-                              <MaterialIcons name={getRouteIcon(route.kind)} size={22} color={route.color} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
-                                {route.title}
-                              </ThemedText>
-                              <ThemedText style={[styles.routeSubtitle, { color: palette.muted }]}>
-                                {route.subtitle}
-                              </ThemedText>
-                            </View>
-                            {isSelected ? (
-                              <MaterialIcons name="check-circle" size={22} color={route.color} />
-                            ) : null}
-                          </View>
-
-                          <View style={styles.badgeRow}>
-                            {route.badges.map((badge) => (
-                              <View
-                                key={`${route.id}-${badge}`}
-                                style={[
-                                  styles.badge,
-                                  {
-                                    backgroundColor: `${route.color}18`,
-                                  },
-                                ]}>
-                                <ThemedText style={[styles.badgeText, { color: route.color }]}>{badge}</ThemedText>
-                              </View>
-                            ))}
-                          </View>
-
-                          <View style={styles.metricRow}>
-                            <View style={styles.metricCard}>
-                              <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Time</ThemedText>
-                              <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
-                                {formatDuration(route.durationSeconds)}
-                              </ThemedText>
-                            </View>
-                            <View style={styles.metricCard}>
-                              <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Distance</ThemedText>
-                              <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
-                                {formatDistance(route.distanceMeters)}
-                              </ThemedText>
-                            </View>
-                            <View style={styles.metricCard}>
-                              <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>CO2</ThemedText>
-                              <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
-                                {formatCo2(route.co2Kg)}
-                              </ThemedText>
-                            </View>
-                          </View>
-
-                          <ThemedText style={[styles.routeBodyText, { color: palette.text }]}>
-                            {route.summary}
+                          <MaterialIcons name="navigation" size={20} color="#FFFFFF" />
+                          <ThemedText style={styles.secondaryButtonText}>
+                            {getRouteStartLabel(selectedRoute.kind, isSimulating)}
                           </ThemedText>
-                          <ThemedText style={[styles.routeBodyText, { color: palette.muted }]}>
-                            {route.kind === 'drive'
-                              ? route.co2SavedKg > 0
-                                ? `Estimated to save ${formatCo2(route.co2SavedKg)} compared with another car route.`
-                                : 'Estimated emissions for the selected car route.'
-                              : route.co2SavedKg > 0
-                                ? `Estimated to save ${formatCo2(route.co2SavedKg)} compared with the fuel-efficient drive option.`
-                                : 'Estimated emissions for this route type.'}
-                          </ThemedText>
-
-                          {isSelected ? (
-                            <Pressable
-                              disabled={isSimulating}
-                              onPress={handleStartSimulation}
-                              style={[
-                                styles.secondaryButton,
-                                {
-                                  backgroundColor: route.color,
-                                },
-                              ]}>
-                              <MaterialIcons name="navigation" size={20} color="#FFFFFF" />
-                              <ThemedText style={styles.secondaryButtonText}>
-                                {getRouteStartLabel(route.kind, isSimulating)}
-                              </ThemedText>
-                            </Pressable>
-                          ) : null}
                         </Pressable>
-                      );
-                    })}
+                      </View>
+                    ) : null}
                   </ScrollView>
                 </View>
               ) : null}
@@ -1593,6 +1645,28 @@ const styles = StyleSheet.create({
   bottomSheetContent: {
     padding: 18,
     gap: 14,
+  },
+  modeTabs: {
+    borderWidth: 1,
+    borderRadius: 18,
+    flexDirection: 'row',
+    gap: 6,
+    padding: 6,
+  },
+  modeTab: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+  modeTabText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   progressChip: {
     flexDirection: 'row',
