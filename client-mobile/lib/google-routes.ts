@@ -7,8 +7,6 @@ const SOLO_DRIVE_CO2_PER_KM = 0.192;
 const ESTIMATED_TRANSIT_CO2_PER_KM = 0.05;
 const GASOLINE_CO2_PER_LITER = 2.31;
 const ROUTE_PRIORITY: RouteKind[] = ['walk', 'bike', 'transit', 'drive'];
-const ACTIVE_TRAVEL_WARNING =
-  'Google marks walking and bicycling directions as beta, so check the path carefully before starting.';
 
 const ROUTE_COLORS: Record<RouteKind, string> = {
   walk: '#3D9B63',
@@ -288,7 +286,7 @@ async function fetchRoutesForMode(
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': apiKey,
       'X-Goog-FieldMask':
-        'routes.distanceMeters,routes.duration,routes.description,routes.routeLabels,routes.warnings,routes.polyline.encodedPolyline,routes.travelAdvisory.fuelConsumptionMicroliters,routes.legs.startLocation,routes.legs.endLocation',
+        'routes.distanceMeters,routes.duration,routes.description,routes.routeLabels,routes.polyline.encodedPolyline,routes.travelAdvisory.fuelConsumptionMicroliters,routes.legs.startLocation,routes.legs.endLocation',
     },
     body: JSON.stringify(buildRouteRequest(kind, origin, destination)),
   });
@@ -379,14 +377,8 @@ function getRouteCopy(kind: RouteKind, fuelEfficientDrive: boolean) {
   }
 }
 
-function buildWarnings(kind: RouteKind, route: GoogleRoute) {
-  const warnings = [...(route.warnings ?? [])];
-
-  if ((kind === 'walk' || kind === 'bike') && !warnings.includes(ACTIVE_TRAVEL_WARNING)) {
-    warnings.push(ACTIVE_TRAVEL_WARNING);
-  }
-
-  return warnings;
+function buildWarnings() {
+  return [];
 }
 
 function buildRouteOption(
@@ -422,7 +414,7 @@ function buildRouteOption(
     end,
     color: ROUTE_COLORS[kind],
     badges: getModeBadges(kind, driveReferenceCo2Kg, driveAlternativeCo2Kg),
-    warnings: buildWarnings(kind, route),
+    warnings: buildWarnings(),
   };
 }
 
