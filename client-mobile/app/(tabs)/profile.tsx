@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useRouter } from 'expo-router';
 import { type ComponentProps, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -21,25 +22,22 @@ import {
   completeCarpool,
   fetchUserDashboard,
   fetchUserTrips,
-  plantForestTree,
   rejectCarpoolRequest,
   startCarpool,
 } from '@/lib/api';
 import { getCarpoolRoleStatus } from '@/lib/carpool-status';
 import { formatCo2, formatDistance, formatDuration, formatMultiplier, formatTripDate } from '@/lib/formatters';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import {
-  ForestTree,
-  UserDashboard,
-} from '@/types/dashboard';
+import { UserDashboard } from '@/types/dashboard';
 import { TripRecord } from '@/types/trips';
 
 const CARPOOL_POLL_INTERVAL_MS = 5000;
 
-type ForestCellSelection = {
-  x: number;
-  y: number;
-} | null;
+type HistoryView = 'personal' | 'offered';
+type HistoryTripMeta = {
+  icon: ComponentProps<typeof MaterialIcons>['name'];
+  label: string;
+};
 
 type TreeVisual = {
   badge: string;
@@ -110,38 +108,59 @@ function getGridKey(x: number, y: number) {
   return `${x}:${y}`;
 }
 
-function findFirstEmptyCell(
-  gridColumns: number,
-  gridRows: number,
-  plantedTrees: ForestTree[]
-): ForestCellSelection {
-  const occupiedCells = new Set(plantedTrees.map((tree) => getGridKey(tree.gridX, tree.gridY)));
-
-  for (let y = 0; y < gridRows; y += 1) {
-    for (let x = 0; x < gridColumns; x += 1) {
-      if (!occupiedCells.has(getGridKey(x, y))) {
-        return { x, y };
-      }
-    }
+function getHistoryTripMeta(trip: TripRecord): HistoryTripMeta {
+  if (trip.routeType === 'transit') {
+    return {
+      icon: 'directions-transit',
+      label: 'Public Transport',
+    };
   }
 
-  return null;
+  if (trip.routeType === 'carpool') {
+    return trip.participantRole === 'driver'
+      ? {
+          icon: 'drive-eta',
+          label: 'Ride Offered',
+        }
+      : {
+          icon: 'groups',
+          label: 'Carpool Rider',
+        };
+  }
+
+  if (trip.routeType === 'walk') {
+    return {
+      icon: 'directions-walk',
+      label: 'Walk',
+    };
+  }
+
+  if (trip.routeType === 'drive') {
+    return {
+      icon: 'directions-car',
+      label: 'Drive',
+    };
+  }
+
+  return {
+    icon: 'directions-bike',
+    label: 'Bike',
+  };
 }
 
 export default function ProfileScreen() {
   const colorScheme = useColorScheme();
   const isFocused = useIsFocused();
+  const router = useRouter();
   const {
     userId,
     displayName,
-    setDisplayName,
     activeProfile,
     availableProfiles,
     loginWithUsername,
     tripVersion,
     notifyTripSaved,
   } = useUserProfile();
-  const [draftName, setDraftName] = useState(displayName);
   const [loginName, setLoginName] = useState(displayName);
   const [dashboard, setDashboard] = useState<UserDashboard | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
@@ -150,11 +169,8 @@ export default function ProfileScreen() {
   const [historyTrips, setHistoryTrips] = useState<TripRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [plantModalVisible, setPlantModalVisible] = useState(false);
-  const [selectedTreeId, setSelectedTreeId] = useState<string | null>(null);
-  const [selectedForestCell, setSelectedForestCell] = useState<ForestCellSelection>(null);
-  const [plantError, setPlantError] = useState<string | null>(null);
-  const [isPlanting, setIsPlanting] = useState(false);
+  const [historyView, setHistoryView] = useState<HistoryView>('personal');
+  const [loginVisible, setLoginVisible] = useState(false);
   const [carpoolActionError, setCarpoolActionError] = useState<string | null>(null);
   const [carpoolActionMessage, setCarpoolActionMessage] = useState<string | null>(null);
   const [carpoolActionKey, setCarpoolActionKey] = useState<string | null>(null);
@@ -245,7 +261,6 @@ export default function ProfileScreen() {
   }
 
   useEffect(() => {
-    setDraftName(displayName);
     setLoginName(displayName);
   }, [displayName]);
 
@@ -341,58 +356,52 @@ export default function ProfileScreen() {
 
   const summary = dashboard?.summary ?? null;
   const forest = dashboard?.forest ?? null;
-  const achievements = dashboard?.achievements ?? [];
-  const recentTrips = dashboard?.recentTrips ?? [];
   const carpoolSummary = dashboard?.carpools.summary ?? null;
   const myCarpools = dashboard?.carpools.trips ?? [];
-  const forestCapacity = forest ? forest.gridColumns * forest.gridRows : 0;
-  const isForestFull = forest ? forest.totalTrees >= forestCapacity : false;
-  const selectedTree =
-    forest?.treeCatalog.find((treeOption) => treeOption.id === selectedTreeId) ?? null;
   const displayNameForHeader = displayName || summary?.displayName || 'Campus Rider';
+  const personalHistoryTrips = historyTrips.filter(
+    (trip) =>
+      trip.routeType === 'walk' ||
+      trip.routeType === 'bike' ||
+      trip.routeType === 'drive' ||
+      trip.routeType === 'transit' ||
+      (trip.routeType === 'carpool' && trip.participantRole === 'rider')
+  );
+  const offeredHistoryTrips = historyTrips.filter(
+    (trip) => trip.routeType === 'carpool' && trip.participantRole === 'driver'
+  );
+  const activeCarpoolTrips = myCarpools.filter((trip) =>
+    ['draft', 'scheduled', 'confirmed', 'active'].includes(trip.status)
+  );
 
-  function openPlantModal() {
-    if (!forest) {
-      return;
-    }
-
-    const defaultTree =
-      forest.treeCatalog.find((treeOption) => treeOption.isUnlocked && treeOption.isAffordable) ??
-      forest.treeCatalog.find((treeOption) => treeOption.isUnlocked) ??
-      forest.treeCatalog[0] ??
-      null;
-
-    setSelectedTreeId(defaultTree?.id ?? null);
-    setSelectedForestCell(findFirstEmptyCell(forest.gridColumns, forest.gridRows, forest.plantedTrees));
-    setPlantError(null);
-    setPlantModalVisible(true);
+  function openHistoryModal() {
+    setHistoryView('personal');
+    setHistoryVisible(true);
   }
 
-  async function handlePlantTree() {
-    if (!selectedTree || !selectedForestCell || !summary) {
+  function openLoginModal() {
+    setLoginName(activeProfile.displayName);
+    setLoginError(null);
+    setLoginMessage(null);
+    setLoginVisible(true);
+  }
+
+  function openForestTab() {
+    router.push('/(tabs)/forest');
+  }
+
+  function handleProfileChipPress(profileName: string) {
+    setLoginName(profileName);
+    const result = loginWithUsername(profileName);
+
+    if (!result.ok) {
+      setLoginError(result.error);
+      setLoginMessage(null);
       return;
     }
 
-    setIsPlanting(true);
-    setPlantError(null);
-
-    try {
-      const nextDashboard = await plantForestTree({
-        userId,
-        treeTypeId: selectedTree.id,
-        gridX: selectedForestCell.x,
-        gridY: selectedForestCell.y,
-      });
-
-      setDashboard(nextDashboard);
-      setPlantModalVisible(false);
-      setSelectedForestCell(null);
-      setSelectedTreeId(null);
-    } catch (error) {
-      setPlantError(error instanceof Error ? error.message : 'Unable to plant a tree right now.');
-    } finally {
-      setIsPlanting(false);
-    }
+    setLoginError(null);
+    setLoginMessage(`Signed in as ${profileName}.`);
   }
 
   async function refreshDashboardSnapshot() {
@@ -419,7 +428,7 @@ export default function ProfileScreen() {
     }
   }
 
-  function renderForestGrid(interactive = false) {
+  function renderForestPreviewGrid() {
     if (!forest) {
       return null;
     }
@@ -437,8 +446,6 @@ export default function ProfileScreen() {
             {columns.map((column) => {
               const key = getGridKey(column, row);
               const plantedTree = occupiedTrees.get(key);
-              const isSelected =
-                selectedForestCell?.x === column && selectedForestCell?.y === row;
 
               if (plantedTree) {
                 const treeVisual = getTreeVisual(plantedTree.treeTypeId);
@@ -470,27 +477,6 @@ export default function ProfileScreen() {
                 );
               }
 
-              if (interactive) {
-                return (
-                  <Pressable
-                    key={key}
-                    onPress={() => setSelectedForestCell({ x: column, y: row })}
-                    style={[
-                      styles.forestCell,
-                      {
-                        backgroundColor: isSelected ? palette.accentSoft : palette.input,
-                        borderColor: isSelected ? palette.accent : palette.border,
-                      },
-                    ]}>
-                    <MaterialIcons
-                      name="add"
-                      size={18}
-                      color={isSelected ? palette.accent : palette.muted}
-                    />
-                  </Pressable>
-                );
-              }
-
               return (
                 <View
                   key={key}
@@ -511,6 +497,8 @@ export default function ProfileScreen() {
   }
 
   function renderHistoryContent() {
+    const filteredTrips = historyView === 'personal' ? personalHistoryTrips : offeredHistoryTrips;
+
     if (isHistoryLoading) {
       return (
         <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
@@ -520,7 +508,7 @@ export default function ProfileScreen() {
       );
     }
 
-    if (historyError && historyTrips.length === 0) {
+    if (historyError && filteredTrips.length === 0) {
       return (
         <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
           <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
@@ -529,30 +517,40 @@ export default function ProfileScreen() {
       );
     }
 
-    if (historyTrips.length === 0) {
+    if (filteredTrips.length === 0) {
       return (
         <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
           <MaterialIcons name="history" size={20} color={palette.accent} />
           <ThemedText style={{ color: palette.text, flex: 1 }}>
-            No trips saved yet. Run a route simulation from the map tab to build your history.
+            {historyView === 'personal'
+              ? 'No personal trips saved yet. Complete a walk, bike, transit, or rider carpool trip to build your history.'
+              : 'No rides offered yet. Publish and complete a carpool as a driver to see it here.'}
           </ThemedText>
         </View>
       );
     }
 
-    return historyTrips.map((trip) => (
+    return filteredTrips.map((trip) => (
       <View
         key={trip.id}
         style={[styles.tripCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
         <View style={styles.tripHeader}>
+          {(() => {
+            const tripMeta = getHistoryTripMeta(trip);
+
+            return (
+              <View
+                accessibilityLabel={tripMeta.label}
+                style={[styles.historyTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
+                <MaterialIcons name={tripMeta.icon} size={18} color={palette.accent} />
+              </View>
+            );
+          })()}
           <View style={{ flex: 1 }}>
             <ThemedText style={[styles.tripTitle, { color: palette.text }]}>{trip.routeTitle}</ThemedText>
             <ThemedText style={{ color: palette.muted }}>
               {trip.originLabel} to {trip.destinationLabel}
             </ThemedText>
-          </View>
-          <View style={[styles.routeTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
-            <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>{trip.routeType}</ThemedText>
           </View>
         </View>
 
@@ -740,12 +738,20 @@ export default function ProfileScreen() {
               Grow a virtual forest from every lower-carbon trip you take.
             </ThemedText>
           </View>
-          <Pressable
-            onPress={() => setHistoryVisible(true)}
-            style={[styles.historyButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
-            <MaterialIcons name="history" size={18} color={palette.accent} />
-            <ThemedText style={[styles.historyButtonText, { color: palette.text }]}>History</ThemedText>
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityLabel="Profiles"
+              onPress={openLoginModal}
+              style={[styles.historyButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+              <MaterialIcons name="person-outline" size={18} color={palette.accent} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="History"
+              onPress={openHistoryModal}
+              style={[styles.historyButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+              <MaterialIcons name="history" size={18} color={palette.accent} />
+            </Pressable>
+          </View>
         </View>
 
         {dashboardError ? (
@@ -865,7 +871,7 @@ export default function ProfileScreen() {
                     My Carpools
                   </ThemedText>
                   <ThemedText style={{ color: palette.muted }}>
-                    Active, scheduled, and completed shared rides live here.
+                    Manage your active and upcoming shared rides here. Completed carpools now live in History.
                   </ThemedText>
                 </View>
 
@@ -910,15 +916,15 @@ export default function ProfileScreen() {
                   </View>
                 ) : null}
 
-                {myCarpools.length === 0 ? (
+                {activeCarpoolTrips.length === 0 ? (
                   <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
                     <MaterialIcons name="groups" size={20} color={palette.accent} />
                     <ThemedText style={{ color: palette.text, flex: 1 }}>
-                      Publish a carpool from the map tab or request a seat to start building shared rides.
+                      No active carpool cards right now. Use the map tab to publish a ride or check History for completed carpools.
                     </ThemedText>
                   </View>
                 ) : (
-                  myCarpools.map((trip) => {
+                  activeCarpoolTrips.map((trip) => {
                     const roleStatus = getCarpoolRoleStatus(trip, userId);
                     const statusColors = getCarpoolStatusColors(roleStatus.tone);
 
@@ -1087,270 +1093,139 @@ export default function ProfileScreen() {
             ) : null}
 
             {forest ? (
-              <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <Pressable
+                onPress={openForestTab}
+                style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
                 <View style={styles.sectionHeader}>
                   <View style={{ flex: 1, gap: 4 }}>
                     <ThemedText type="subtitle" style={{ color: palette.text }}>
                       My Forest
                     </ThemedText>
                     <ThemedText style={{ color: palette.muted }}>
-                      Redeem points to plant trees and turn your climate impact into a living grid.
+                      Tap to enter the full forest world and continue growing what you have planted.
                     </ThemedText>
                   </View>
-                  <Pressable
-                    disabled={isForestFull}
-                    onPress={openPlantModal}
-                    style={[
-                      styles.primaryActionButton,
-                      {
-                        backgroundColor: isForestFull ? palette.cardSecondary : palette.accent,
-                        borderColor: isForestFull ? palette.border : palette.accent,
-                        opacity: isForestFull ? 0.6 : 1,
-                      },
-                    ]}>
-                    <MaterialIcons
-                      name="park"
-                      size={18}
-                      color={isForestFull ? palette.text : '#FFFFFF'}
-                    />
-                    <ThemedText
-                      style={[
-                        styles.primaryActionText,
-                        { color: isForestFull ? palette.text : '#FFFFFF' },
-                      ]}>
-                      {isForestFull ? 'Forest full' : 'Plant Tree'}
-                    </ThemedText>
-                  </Pressable>
-                </View>
-
-                <View style={styles.forestSummaryRow}>
-                  <View style={[styles.infoPill, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                    <ThemedText style={[styles.infoPillLabel, { color: palette.muted }]}>Planted</ThemedText>
-                    <ThemedText style={[styles.infoPillValue, { color: palette.text }]}>
-                      {forest.totalTrees}/{forestCapacity}
-                    </ThemedText>
-                  </View>
-                  <View style={[styles.infoPill, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                    <ThemedText style={[styles.infoPillLabel, { color: palette.muted }]}>Available</ThemedText>
-                    <ThemedText style={[styles.infoPillValue, { color: palette.text }]}>
-                      {formatPoints(summary.totalPointsAvailable)}
-                    </ThemedText>
-                  </View>
-                  <View style={[styles.infoPill, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                    <ThemedText style={[styles.infoPillLabel, { color: palette.muted }]}>Redeemed</ThemedText>
-                    <ThemedText style={[styles.infoPillValue, { color: palette.text }]}>
-                      {formatPoints(summary.totalPointsSpent)}
-                    </ThemedText>
+                  <View style={[styles.previewForestBadge, { backgroundColor: `${palette.accent}18` }]}>
+                    <MaterialIcons name="park" size={18} color={palette.accent} />
                   </View>
                 </View>
 
                 <View style={[styles.forestCanvasCard, { backgroundColor: palette.canvas, borderColor: palette.border }]}>
-                  {renderForestGrid()}
+                  {renderForestPreviewGrid()}
                 </View>
 
                 <View style={[styles.narrativeCard, { backgroundColor: palette.warningSurface, borderColor: palette.border }]}>
                   <MaterialIcons name="eco" size={18} color={palette.accent} />
                   <ThemedText style={{ color: palette.text, flex: 1 }}>
-                    {dashboard?.narrative}
+                    {forest.totalTrees > 0
+                      ? `${forest.totalTrees} planted tree${forest.totalTrees === 1 ? '' : 's'} in your world.`
+                      : 'Your forest world is ready. Open it to plant your first tree.'}
                   </ThemedText>
                 </View>
-              </View>
+              </Pressable>
             ) : null}
 
-            {forest ? (
-              <View style={styles.sectionBlock}>
-                <View style={styles.sectionHeaderInline}>
-                  <ThemedText type="subtitle" style={{ color: palette.text }}>
-                    Tree Progression
-                  </ThemedText>
-                  <ThemedText style={{ color: palette.muted }}>
-                    Unlock higher tiers through points and CO2 saved.
-                  </ThemedText>
-                </View>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
-                  {forest.treeCatalog.map((treeOption) => {
-                    const treeVisual = getTreeVisual(treeOption.id);
-                    const statusCopy = treeOption.isUnlocked
-                      ? treeOption.isAffordable
-                        ? 'Ready to plant'
-                        : `Need ${formatPoints(Math.max(treeOption.cost - summary.totalPointsAvailable, 0))}`
-                      : treeOption.unlockRequirement;
-
-                    return (
-                      <View
-                        key={treeOption.id}
-                        style={[
-                          styles.treeTierCard,
-                          {
-                            backgroundColor: palette.card,
-                            borderColor: treeOption.isUnlocked ? palette.accent : palette.border,
-                          },
-                        ]}>
-                        <View style={styles.treeTierHeader}>
-                          <View
-                            style={[
-                              styles.treeTierIcon,
-                              {
-                                backgroundColor: treeVisual.surface,
-                                borderColor: `${treeVisual.tint}35`,
-                              },
-                            ]}>
-                            <MaterialIcons name={treeVisual.icon} size={22} color={treeVisual.tint} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <ThemedText style={[styles.treeTierName, { color: palette.text }]}>
-                              {treeOption.name}
-                            </ThemedText>
-                            <ThemedText style={{ color: palette.muted }}>
-                              {treeOption.tier} | {formatPoints(treeOption.cost)}
-                            </ThemedText>
-                          </View>
-                        </View>
-                        <ThemedText style={{ color: palette.text }}>{treeOption.description}</ThemedText>
-                        <ThemedText style={{ color: palette.muted }}>{statusCopy}</ThemedText>
-                        <View style={[styles.progressTrack, { backgroundColor: palette.input }]}>
-                          <View
-                            style={[
-                              styles.progressFill,
-                              {
-                                backgroundColor: treeOption.isUnlocked ? palette.accent : palette.accentAlt,
-                                width: `${Math.max(treeOption.unlockProgress * 100, treeOption.isUnlocked ? 100 : 8)}%`,
-                              },
-                            ]}
-                          />
-                        </View>
-                        <ThemedText style={{ color: palette.muted }}>
-                          Planted {treeOption.plantedCount} time{treeOption.plantedCount === 1 ? '' : 's'}
-                        </ThemedText>
-                      </View>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            ) : null}
-
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHeaderInline}>
-                <ThemedText type="subtitle" style={{ color: palette.text }}>
-                  Achievements
+            <View style={styles.footerNote}>
+              <View style={styles.footerNoteRow}>
+                <ThemedText style={{ color: palette.muted, textAlign: 'center', fontSize: 12 }}>
+                  Built with love by Team GREEN DEVS
                 </ThemedText>
-                <ThemedText style={{ color: palette.muted }}>
-                  Small milestones that keep the forest growing.
-                </ThemedText>
-              </View>
-
-              <View style={styles.achievementGrid}>
-                {achievements.map((achievement) => (
-                  <View
-                    key={achievement.id}
-                    style={[styles.achievementCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                    <View style={styles.achievementHeader}>
-                      <View
-                        style={[
-                          styles.achievementIcon,
-                          {
-                            backgroundColor: achievement.earned ? palette.accentSoft : palette.input,
-                          },
-                        ]}>
-                        <MaterialIcons
-                          name={achievement.earned ? 'emoji-events' : 'lock'}
-                          size={20}
-                          color={achievement.earned ? palette.accent : palette.muted}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <ThemedText style={[styles.achievementTitle, { color: palette.text }]}>
-                          {achievement.title}
-                        </ThemedText>
-                        <ThemedText style={{ color: palette.muted }}>{achievement.description}</ThemedText>
-                      </View>
-                    </View>
-                    <View style={[styles.progressTrack, { backgroundColor: palette.input }]}>
-                      <View
-                        style={[
-                          styles.progressFill,
-                          {
-                            backgroundColor: achievement.earned ? palette.accent : palette.accentAlt,
-                            width: `${Math.max(achievement.progress * 100, achievement.currentValue > 0 ? 10 : 0)}%`,
-                          },
-                        ]}
-                      />
-                    </View>
-                    <ThemedText style={{ color: palette.text }}>
-                      {achievement.currentValue.toFixed(achievement.unit === 'kg CO2' ? 1 : 0)} /{' '}
-                      {achievement.targetValue} {achievement.unit}
-                    </ThemedText>
-                  </View>
-                ))}
+                <ThemedText style={{ color: palette.accent, fontSize: 12 }}>💚</ThemedText>
               </View>
             </View>
+          </>
+        ) : null}
+      </ScrollView>
 
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHeaderInline}>
-                <ThemedText type="subtitle" style={{ color: palette.text }}>
-                  Recent Trips
+      <Modal transparent visible={historyVisible} animationType="fade" onRequestClose={() => setHistoryVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <SafeAreaView
+            style={[styles.modalCard, { backgroundColor: palette.card, borderColor: palette.border }]}
+            edges={['top', 'bottom']}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1, gap: 4 }}>
+                <ThemedText type="title" style={[styles.modalTitle, { color: palette.text }]}>
+                  Trip History
                 </ThemedText>
                 <ThemedText style={{ color: palette.muted }}>
-                  Your latest rides and their individual impact.
+                  Keep personal travel and rides you offered in one clean place.
                 </ThemedText>
               </View>
-
-              {recentTrips.length === 0 ? (
-                <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                  <MaterialIcons name="history" size={20} color={palette.accent} />
-                  <ThemedText style={{ color: palette.text, flex: 1 }}>
-                    No completed trips yet. Simulate a route from the map tab to start building impact.
-                  </ThemedText>
-                </View>
-              ) : (
-                recentTrips.map((trip) => (
-                  <View
-                    key={trip.id}
-                    style={[styles.tripCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                    <View style={styles.tripHeader}>
-                      <View style={{ flex: 1 }}>
-                        <ThemedText style={[styles.tripTitle, { color: palette.text }]}>{trip.routeTitle}</ThemedText>
-                        <ThemedText style={{ color: palette.muted }}>
-                          {trip.originLabel} to {trip.destinationLabel}
-                        </ThemedText>
-                      </View>
-                      <View style={[styles.routeTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
-                        <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>{trip.routeType}</ThemedText>
-                      </View>
-                    </View>
-
-                    <View style={styles.tripImpactRow}>
-                      <View style={[styles.tripImpactChip, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                        <ThemedText style={[styles.tripImpactLabel, { color: palette.muted }]}>Saved</ThemedText>
-                        <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
-                          {formatCo2(trip.co2SavedKg)}
-                        </ThemedText>
-                      </View>
-                      <View style={[styles.tripImpactChip, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                        <ThemedText style={[styles.tripImpactLabel, { color: palette.muted }]}>Points</ThemedText>
-                        <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
-                          {formatPoints(getTripPoints(trip))}
-                        </ThemedText>
-                      </View>
-                    </View>
-
-                    <ThemedText style={{ color: palette.muted }}>
-                      {formatTripDate(trip.completedAt)} | {formatDistance(trip.distanceMeters)} |{' '}
-                      {formatDuration(trip.durationSeconds)}
-                    </ThemedText>
-                  </View>
-                ))
-              )}
+              <Pressable
+                onPress={() => setHistoryVisible(false)}
+                style={[styles.modalCloseButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+                <MaterialIcons name="close" size={20} color={palette.text} />
+              </Pressable>
             </View>
 
-            <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-              <ThemedText type="subtitle" style={{ color: palette.text }}>
-                Username Login
-              </ThemedText>
-              <ThemedText style={{ color: palette.muted }}>
-                Enter a known username and this simulator will switch to that profile.
-              </ThemedText>
+            <View
+              style={[
+                styles.historyFilterRow,
+                { backgroundColor: palette.cardSecondary, borderColor: palette.border },
+              ]}>
+              <Pressable
+                accessibilityLabel="Personal trips"
+                onPress={() => setHistoryView('personal')}
+                style={[
+                  styles.historyFilterButton,
+                  historyView === 'personal' && {
+                    backgroundColor: palette.accent,
+                    borderColor: palette.accent,
+                  },
+                ]}>
+                <MaterialIcons
+                  name="person"
+                  size={20}
+                  color={historyView === 'personal' ? '#FFFFFF' : palette.text}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Rides offered"
+                onPress={() => setHistoryView('offered')}
+                style={[
+                  styles.historyFilterButton,
+                  historyView === 'offered' && {
+                    backgroundColor: palette.accent,
+                    borderColor: palette.accent,
+                  },
+                ]}>
+                <MaterialIcons
+                  name="drive-eta"
+                  size={20}
+                  color={historyView === 'offered' ? '#FFFFFF' : palette.text}
+                />
+              </Pressable>
+            </View>
 
+            <ScrollView contentContainerStyle={styles.modalList} showsVerticalScrollIndicator={false}>
+              {renderHistoryContent()}
+            </ScrollView>
+          </SafeAreaView>
+        </View>
+      </Modal>
+
+      <Modal transparent visible={loginVisible} animationType="fade" onRequestClose={() => setLoginVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <SafeAreaView
+            style={[styles.modalCard, { backgroundColor: palette.card, borderColor: palette.border }]}
+            edges={['top', 'bottom']}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1, gap: 4 }}>
+                <ThemedText type="title" style={[styles.modalTitle, { color: palette.text }]}>
+                  Profiles
+                </ThemedText>
+                <ThemedText style={{ color: palette.muted }}>
+                  Switch users and update the rider name from one place.
+                </ThemedText>
+              </View>
+              <Pressable
+                onPress={() => setLoginVisible(false)}
+                style={[styles.modalCloseButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+                <MaterialIcons name="close" size={20} color={palette.text} />
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalList} showsVerticalScrollIndicator={false}>
               <TextInput
                 value={loginName}
                 onChangeText={setLoginName}
@@ -1395,7 +1270,7 @@ export default function ProfileScreen() {
                   return (
                     <Pressable
                       key={profile.userId}
-                      onPress={() => setLoginName(profile.displayName)}
+                      onPress={() => handleProfileChipPress(profile.displayName)}
                       style={[
                         styles.userNameChip,
                         {
@@ -1417,272 +1292,11 @@ export default function ProfileScreen() {
                   );
                 })}
               </View>
-            </View>
-
-            <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-              <ThemedText type="subtitle" style={{ color: palette.text }}>
-                Rider Details
-              </ThemedText>
-              <ThemedText style={{ color: palette.muted }}>
-                This name is used for newly saved trips and the leaderboard for {activeProfile.displayName}.
-              </ThemedText>
-              <TextInput
-                value={draftName}
-                onChangeText={setDraftName}
-                placeholder="Set your rider name"
-                placeholderTextColor={palette.muted}
-                style={[
-                  styles.input,
-                  {
-                    color: palette.text,
-                    backgroundColor: palette.input,
-                    borderColor: palette.border,
-                  },
-                ]}
-              />
-              <Pressable
-                onPress={() => setDisplayName(draftName)}
-                style={[styles.saveButton, { backgroundColor: palette.accent }]}>
-                <MaterialIcons name="check" size={20} color="#FFFFFF" />
-                <ThemedText style={styles.saveButtonText}>Use this rider name</ThemedText>
-              </Pressable>
-            </View>
-
-            <View style={[styles.roadmapCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-              <View style={styles.roadmapHeader}>
-                <MaterialIcons name="insights" size={20} color={palette.accentAlt} />
-                <ThemedText type="subtitle" style={{ color: palette.text }}>
-                  Built To Expand
-                </ThemedText>
-              </View>
-              <ThemedText style={{ color: palette.muted }}>
-                This forest system is ready for future map-based forests, friend challenges, and real-world tree planting partnerships.
-              </ThemedText>
-            </View>
-          </>
-        ) : null}
-      </ScrollView>
-
-      <Modal transparent visible={historyVisible} animationType="fade" onRequestClose={() => setHistoryVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <SafeAreaView
-            style={[styles.modalCard, { backgroundColor: palette.card, borderColor: palette.border }]}
-            edges={['top', 'bottom']}>
-            <View style={styles.modalHeader}>
-              <View style={{ flex: 1, gap: 4 }}>
-                <ThemedText type="title" style={[styles.modalTitle, { color: palette.text }]}>
-                  Trip History
-                </ThemedText>
-                <ThemedText style={{ color: palette.muted }}>
-                  Every completed simulation appears here.
-                </ThemedText>
-              </View>
-              <Pressable
-                onPress={() => setHistoryVisible(false)}
-                style={[styles.modalCloseButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
-                <MaterialIcons name="close" size={20} color={palette.text} />
-              </Pressable>
-            </View>
-
-            <ScrollView contentContainerStyle={styles.modalList} showsVerticalScrollIndicator={false}>
-              {renderHistoryContent()}
             </ScrollView>
           </SafeAreaView>
         </View>
       </Modal>
 
-      <Modal
-        transparent
-        visible={plantModalVisible}
-        animationType="fade"
-        onRequestClose={() => setPlantModalVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <SafeAreaView
-            style={[styles.modalCard, { backgroundColor: palette.card, borderColor: palette.border }]}
-            edges={['top', 'bottom']}>
-            <View style={styles.modalHeader}>
-              <View style={{ flex: 1, gap: 4 }}>
-                <ThemedText type="title" style={[styles.modalTitle, { color: palette.text }]}>
-                  Plant Tree
-                </ThemedText>
-                <ThemedText style={{ color: palette.muted }}>
-                  Spend points, choose a tile, and grow your forest.
-                </ThemedText>
-              </View>
-              <Pressable
-                onPress={() => setPlantModalVisible(false)}
-                style={[styles.modalCloseButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
-                <MaterialIcons name="close" size={20} color={palette.text} />
-              </Pressable>
-            </View>
-
-            <ScrollView contentContainerStyle={styles.modalList} showsVerticalScrollIndicator={false}>
-              {summary ? (
-                <View style={styles.plantSummaryRow}>
-                  <View style={[styles.infoPill, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                    <ThemedText style={[styles.infoPillLabel, { color: palette.muted }]}>Available</ThemedText>
-                    <ThemedText style={[styles.infoPillValue, { color: palette.text }]}>
-                      {formatPoints(summary.totalPointsAvailable)}
-                    </ThemedText>
-                  </View>
-                  <View style={[styles.infoPill, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                    <ThemedText style={[styles.infoPillLabel, { color: palette.muted }]}>Forest space</ThemedText>
-                    <ThemedText style={[styles.infoPillValue, { color: palette.text }]}>
-                      {forestCapacity - (forest?.totalTrees ?? 0)} open
-                    </ThemedText>
-                  </View>
-                </View>
-              ) : null}
-
-              {forest?.treeCatalog.map((treeOption) => {
-                const treeVisual = getTreeVisual(treeOption.id);
-                const isSelected = treeOption.id === selectedTreeId;
-                const isPlantable = treeOption.isUnlocked && treeOption.isAffordable;
-
-                return (
-                  <Pressable
-                    key={treeOption.id}
-                    onPress={() => setSelectedTreeId(treeOption.id)}
-                    style={[
-                      styles.catalogCard,
-                      {
-                        backgroundColor: isSelected ? palette.accentSoft : palette.cardSecondary,
-                        borderColor: isSelected ? palette.accent : palette.border,
-                        opacity: treeOption.isUnlocked ? 1 : 0.92,
-                      },
-                    ]}>
-                    <View style={styles.catalogHeader}>
-                      <View
-                        style={[
-                          styles.catalogIcon,
-                          {
-                            backgroundColor: treeVisual.surface,
-                            borderColor: `${treeVisual.tint}35`,
-                          },
-                        ]}>
-                        <MaterialIcons name={treeVisual.icon} size={22} color={treeVisual.tint} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <ThemedText style={[styles.catalogTitle, { color: palette.text }]}>
-                          {treeOption.name}
-                        </ThemedText>
-                        <ThemedText style={{ color: palette.muted }}>
-                          {treeOption.tier} | costs {formatPoints(treeOption.cost)}
-                        </ThemedText>
-                      </View>
-                      <View
-                        style={[
-                          styles.catalogStatusBadge,
-                          {
-                            backgroundColor: treeOption.isUnlocked ? `${palette.accent}18` : palette.input,
-                            borderColor: treeOption.isUnlocked ? `${palette.accent}32` : palette.border,
-                          },
-                        ]}>
-                        <ThemedText
-                          style={{
-                            color: treeOption.isUnlocked ? palette.accent : palette.muted,
-                            fontWeight: '700',
-                          }}>
-                          {treeOption.isUnlocked ? (isPlantable ? 'Ready' : 'Unlocked') : 'Locked'}
-                        </ThemedText>
-                      </View>
-                    </View>
-
-                    <ThemedText style={{ color: palette.text }}>{treeOption.description}</ThemedText>
-                    <ThemedText style={{ color: palette.muted }}>
-                      {treeOption.isUnlocked
-                        ? isPlantable
-                          ? `Spend ${formatPoints(treeOption.cost)} to plant this tree.`
-                          : `Need ${formatPoints(Math.max(treeOption.cost - (summary?.totalPointsAvailable ?? 0), 0))} more to plant.`
-                        : treeOption.unlockRequirement}
-                    </ThemedText>
-
-                    <View style={[styles.progressTrack, { backgroundColor: palette.input }]}>
-                      <View
-                        style={[
-                          styles.progressFill,
-                          {
-                            backgroundColor: treeOption.isUnlocked ? palette.accent : palette.accentAlt,
-                            width: `${Math.max(treeOption.unlockProgress * 100, treeOption.isUnlocked ? 100 : 8)}%`,
-                          },
-                        ]}
-                      />
-                    </View>
-                  </Pressable>
-                );
-              })}
-
-              <View style={[styles.sectionCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
-                <View style={styles.sectionHeaderInline}>
-                  <ThemedText type="subtitle" style={{ color: palette.text }}>
-                    Choose A Plot
-                  </ThemedText>
-                  <ThemedText style={{ color: palette.muted }}>
-                    Pick an empty tile for your next tree.
-                  </ThemedText>
-                </View>
-                <View style={[styles.forestCanvasCard, { backgroundColor: palette.canvas, borderColor: palette.border }]}>
-                  {renderForestGrid(true)}
-                </View>
-                {selectedForestCell ? (
-                  <ThemedText style={{ color: palette.text }}>
-                    Selected tile: column {selectedForestCell.x + 1}, row {selectedForestCell.y + 1}
-                  </ThemedText>
-                ) : (
-                  <ThemedText style={{ color: palette.muted }}>
-                    Choose an empty tile to finish planting.
-                  </ThemedText>
-                )}
-              </View>
-
-              {plantError ? (
-                <View style={[styles.bannerCard, { backgroundColor: palette.errorSurface, borderColor: palette.border }]}>
-                  <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
-                  <ThemedText style={{ color: palette.text, flex: 1 }}>{plantError}</ThemedText>
-                </View>
-              ) : null}
-
-              <Pressable
-                disabled={
-                  isPlanting ||
-                  !selectedTree ||
-                  !selectedForestCell ||
-                  !selectedTree.isUnlocked ||
-                  !selectedTree.isAffordable ||
-                  isForestFull
-                }
-                onPress={handlePlantTree}
-                style={[
-                  styles.confirmPlantButton,
-                  {
-                    backgroundColor:
-                      !selectedTree ||
-                      !selectedForestCell ||
-                      !selectedTree.isUnlocked ||
-                      !selectedTree.isAffordable ||
-                      isForestFull
-                        ? palette.cardSecondary
-                        : palette.accent,
-                    borderColor:
-                      !selectedTree ||
-                      !selectedForestCell ||
-                      !selectedTree.isUnlocked ||
-                      !selectedTree.isAffordable ||
-                      isForestFull
-                        ? palette.border
-                        : palette.accent,
-                    opacity: isPlanting ? 0.75 : 1,
-                  },
-                ]}>
-                {isPlanting ? <ActivityIndicator color="#FFFFFF" /> : <MaterialIcons name="park" size={18} color="#FFFFFF" />}
-                <ThemedText style={styles.confirmPlantText}>
-                  {selectedTree ? `Plant ${selectedTree.name}` : 'Plant Tree'}
-                </ThemedText>
-              </Pressable>
-            </ScrollView>
-          </SafeAreaView>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -1702,6 +1316,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   headerCopy: {
     flex: 1,
     gap: 4,
@@ -1711,17 +1330,14 @@ const styles = StyleSheet.create({
     lineHeight: 34,
   },
   historyButton: {
+    width: 44,
     minHeight: 44,
     borderRadius: 16,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    flexDirection: 'row',
+    paddingHorizontal: 0,
+    paddingVertical: 0,
     alignItems: 'center',
-    gap: 8,
-  },
-  historyButtonText: {
-    fontWeight: '700',
+    justifyContent: 'center',
   },
   loadingCard: {
     borderRadius: 24,
@@ -2031,6 +1647,13 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
   },
+  historyTypeBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   tripTitle: {
     fontSize: 18,
     fontWeight: '700',
@@ -2158,16 +1781,15 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
-  roadmapCard: {
-    borderRadius: 24,
-    borderWidth: 1,
-    padding: 18,
-    gap: 10,
+  footerNote: {
+    paddingTop: 4,
+    paddingBottom: 8,
+    alignItems: 'center',
   },
-  roadmapHeader: {
+  footerNoteRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 6,
   },
   modalBackdrop: {
     flex: 1,
@@ -2203,6 +1825,23 @@ const styles = StyleSheet.create({
   modalList: {
     gap: 12,
     paddingBottom: 8,
+  },
+  historyFilterRow: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 6,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  historyFilterButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
   },
   messageCard: {
     borderRadius: 20,

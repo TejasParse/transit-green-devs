@@ -226,7 +226,7 @@ function getRouteTabLabel(kind: RouteOption['kind']) {
     case 'carpool':
       return 'Carpool';
     case 'drive':
-      return 'Car';
+      return 'Drive';
   }
 }
 
@@ -271,7 +271,7 @@ function getRouteFooterMessage(kind: RouteOption['kind']) {
     case 'carpool':
       return 'Review nearby shared rides, seat pricing, and route impact before requesting a seat.';
     case 'drive':
-      return 'Following the selected fuel-efficient driving route. The map is now in focused navigation mode.';
+      return 'Following the selected driving route. The map is now in focused navigation mode.';
   }
 }
 
@@ -2445,7 +2445,7 @@ export default function MapScreen() {
               ? `Estimated to save ${formatCo2(selectedRoute.co2SavedKg)} compared with another car route.`
               : 'Estimated emissions for the selected car route.'
             : selectedRoute.co2SavedKg > 0
-              ? `Estimated to save ${formatCo2(selectedRoute.co2SavedKg)} compared with the fuel-efficient drive option.`
+              ? `Estimated to save ${formatCo2(selectedRoute.co2SavedKg)} compared with the drive option.`
               : 'Estimated emissions for this route type.'}
         </ThemedText>
 
