@@ -4,6 +4,7 @@ export type Coordinates = {
 };
 
 export type RouteKind = 'walk' | 'bike' | 'transit' | 'drive';
+export type TripRouteType = RouteKind | 'carpool';
 
 export type WaypointInput =
   | {
@@ -61,7 +62,7 @@ export type RoutePlan = {
 export type TripPayload = {
   userId: number;
   displayName: string;
-  routeType: RouteKind;
+  routeType: TripRouteType;
   routeTitle: string;
   originLabel: string;
   destinationLabel: string;

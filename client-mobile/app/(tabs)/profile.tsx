@@ -118,7 +118,8 @@ function findFirstEmptyCell(
 export default function ProfileScreen() {
   const colorScheme = useColorScheme();
   const isFocused = useIsFocused();
-  const { userId, displayName, setDisplayName, tripVersion } = useUserProfile();
+  const { userId, displayName, setDisplayName, tripVersion, availableUsers, setActiveUser } =
+    useUserProfile();
   const [draftName, setDraftName] = useState(displayName);
   const [dashboard, setDashboard] = useState<UserDashboard | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
@@ -835,10 +836,46 @@ export default function ProfileScreen() {
 
             <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
               <ThemedText type="subtitle" style={{ color: palette.text }}>
+                Test Account
+              </ThemedText>
+              <ThemedText style={{ color: palette.muted }}>
+                Switch users to test two-device carpool creation and seat requests.
+              </ThemedText>
+              <View style={styles.demoUserRow}>
+                {availableUsers.map((demoUser) => {
+                  const isSelected = demoUser.id === userId;
+
+                  return (
+                    <Pressable
+                      key={demoUser.id}
+                      onPress={() => setActiveUser(demoUser.id)}
+                      style={[
+                        styles.demoUserChip,
+                        {
+                          backgroundColor: isSelected ? palette.accentSoft : palette.input,
+                          borderColor: isSelected ? palette.accent : palette.border,
+                        },
+                      ]}>
+                      <ThemedText
+                        style={{
+                          color: isSelected ? palette.accent : palette.text,
+                          fontWeight: '700',
+                        }}>
+                        {demoUser.label}
+                      </ThemedText>
+                      <ThemedText style={{ color: palette.muted }}>{demoUser.defaultDisplayName}</ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <ThemedText type="subtitle" style={{ color: palette.text }}>
                 Rider Details
               </ThemedText>
               <ThemedText style={{ color: palette.muted }}>
-                This name is used for newly saved trips and the leaderboard.
+                Active user ID: {userId}. This name is used for newly saved trips and the leaderboard.
               </ThemedText>
               <TextInput
                 value={draftName}
@@ -1482,6 +1519,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 18,
     gap: 12,
+  },
+  demoUserRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  demoUserChip: {
+    width: '47%',
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 3,
   },
   input: {
     borderWidth: 1,

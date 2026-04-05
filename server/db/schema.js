@@ -3,6 +3,7 @@ const { pool } = require('./pool');
 async function resetSchema() {
   await pool.query(`
     DROP TABLE IF EXISTS forest_trees;
+    DROP TABLE IF EXISTS carpool_requests;
     DROP TABLE IF EXISTS trip_users;
     DROP TABLE IF EXISTS trips;
     DROP TABLE IF EXISTS profiles;
@@ -78,6 +79,28 @@ async function ensureSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS carpool_requests (
+      id SERIAL PRIMARY KEY,
+      trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+      host_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      requester_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      pickup_label TEXT NOT NULL,
+      pickup_point JSONB NOT NULL DEFAULT '{}'::jsonb,
+      dropoff_label TEXT NOT NULL,
+      dropoff_point JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled')),
+      eta_seconds INTEGER,
+      route_adjustment JSONB NOT NULL DEFAULT '{}'::jsonb,
+      message TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      responded_at TIMESTAMPTZ,
+      UNIQUE (trip_id, requester_id),
+      CHECK (host_id <> requester_id)
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS forest_trees (
       id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -113,6 +136,21 @@ async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS trip_users_rider_idx
     ON trip_users (rider_id)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS carpool_requests_trip_idx
+    ON carpool_requests (trip_id)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS carpool_requests_host_idx
+    ON carpool_requests (host_id, status, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS carpool_requests_requester_idx
+    ON carpool_requests (requester_id, created_at DESC)
   `);
 
   await pool.query(`

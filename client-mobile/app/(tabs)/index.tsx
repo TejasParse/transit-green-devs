@@ -202,7 +202,7 @@ export default function MapScreen() {
           input: '#F8FBF7',
         };
 
-  const { userId, displayName, notifyTripSaved } = useUserProfile();
+  const { userId, displayName, notifyTripSaved, setCommuteIntent } = useUserProfile();
 
   const mapRef = useRef<MapView | null>(null);
   const miniMapRef = useRef<MapView | null>(null);
@@ -479,6 +479,27 @@ export default function MapScreen() {
       animated: true,
     });
   }, [selectedRouteId, selectedRoute]);
+
+  useEffect(() => {
+    if (!routePlan || !selectedRoute) {
+      return;
+    }
+
+    setCommuteIntent({
+      originLabel: routePlan.originLabel,
+      destinationLabel: routePlan.destinationLabel,
+      origin: routePlan.origin,
+      destination: routePlan.destination,
+      pathPoints:
+        selectedRoute.polyline.length >= 2
+          ? selectedRoute.polyline
+          : [selectedRoute.start, selectedRoute.end],
+      distanceMeters: selectedRoute.distanceMeters,
+      durationSeconds: selectedRoute.durationSeconds,
+      routeKind: selectedRoute.kind,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [routePlan, selectedRoute, setCommuteIntent]);
 
   useEffect(() => {
     if (!summaryVisible || !summaryTrip?.pathPoints?.length) {

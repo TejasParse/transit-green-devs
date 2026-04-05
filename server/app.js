@@ -1,5 +1,6 @@
 const express = require('express');
 
+const carpoolRoutes = require('./routes/carpool-routes');
 const dashboardRoutes = require('./routes/dashboard-routes');
 const healthRoutes = require('./routes/health-routes');
 const tripRoutes = require('./routes/trip-routes');
@@ -24,6 +25,7 @@ app.use((req, res, next) => {
 app.use(healthRoutes);
 app.use(dashboardRoutes);
 app.use(tripRoutes);
+app.use(carpoolRoutes);
 app.use(errorHandler);
 
 module.exports = { app };

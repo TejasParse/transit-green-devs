@@ -1,5 +1,15 @@
 import Constants from 'expo-constants';
 
+import {
+  CarpoolDiscoveryResponse,
+  CarpoolListing,
+  CarpoolRequestRecord,
+  CarpoolRequestsResponse,
+  CreateCarpoolPayload,
+  CreateCarpoolRequestPayload,
+  RespondCarpoolRequestPayload,
+  UpdateCarpoolRequestProgressPayload,
+} from '@/types/carpool';
 import { PlantTreePayload, UserDashboard } from '@/types/dashboard';
 import { LeaderboardSnapshot, TripPayload, TripRecord } from '@/types/trips';
 
@@ -87,6 +97,80 @@ export function plantForestTree(payload: PlantTreePayload) {
 
 export function createTrip(payload: TripPayload) {
   return request<TripRecord>('/api/trips', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+type FetchNearbyCarpoolsParams = {
+  userId: number;
+  source?: { latitude: number; longitude: number } | null;
+  destination?: { latitude: number; longitude: number } | null;
+  sourceRadiusMeters?: number;
+  destinationRadiusMeters?: number;
+};
+
+export function fetchNearbyCarpools(params: FetchNearbyCarpoolsParams) {
+  const searchParams = new URLSearchParams({
+    userId: String(params.userId),
+  });
+
+  if (params.source) {
+    searchParams.set('sourceLat', String(params.source.latitude));
+    searchParams.set('sourceLng', String(params.source.longitude));
+  }
+
+  if (params.destination) {
+    searchParams.set('destinationLat', String(params.destination.latitude));
+    searchParams.set('destinationLng', String(params.destination.longitude));
+  }
+
+  if (params.sourceRadiusMeters != null) {
+    searchParams.set('sourceRadiusMeters', String(params.sourceRadiusMeters));
+  }
+
+  if (params.destinationRadiusMeters != null) {
+    searchParams.set('destinationRadiusMeters', String(params.destinationRadiusMeters));
+  }
+
+  return request<CarpoolDiscoveryResponse>(`/api/carpools?${searchParams.toString()}`);
+}
+
+export function fetchCarpoolRequests(userId: number, role: 'all' | 'sender' | 'host' = 'all') {
+  const searchParams = new URLSearchParams({
+    userId: String(userId),
+    role,
+  });
+
+  return request<CarpoolRequestsResponse>(`/api/carpool-requests?${searchParams.toString()}`);
+}
+
+export function createCarpool(payload: CreateCarpoolPayload) {
+  return request<CarpoolListing>('/api/carpools', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function requestCarpoolSeat(carpoolId: number, payload: CreateCarpoolRequestPayload) {
+  return request<CarpoolRequestRecord>(`/api/carpools/${carpoolId}/requests`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function respondToCarpoolRequest(requestId: number, payload: RespondCarpoolRequestPayload) {
+  return request<CarpoolRequestRecord>(`/api/carpool-requests/${requestId}/respond`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCarpoolRequestProgress(
+  requestId: number,
+  payload: UpdateCarpoolRequestProgressPayload
+) {
+  return request<CarpoolRequestRecord>(`/api/carpool-requests/${requestId}/progress`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

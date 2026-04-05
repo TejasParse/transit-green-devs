@@ -17,6 +17,7 @@ const MAPPING = {
   'house.fill': 'home',
   'paperplane.fill': 'send',
   'map.fill': 'map',
+  'car.fill': 'directions-car',
   'trophy.fill': 'emoji-events',
   'person.crop.circle.fill': 'account-circle',
   'chevron.left.forwardslash.chevron.right': 'code',
