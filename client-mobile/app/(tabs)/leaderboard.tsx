@@ -18,8 +18,14 @@ const EMPTY_LEADERBOARD: LeaderboardSnapshot = {
     totalDistanceMeters: 0,
     totalCo2Kg: 0,
     totalCo2SavedKg: 0,
+    completedCarpools: 0,
+    liveCarpools: 0,
+    totalSharedRides: 0,
+    totalRidersHelped: 0,
+    totalCarpoolCo2SavedKg: 0,
   },
   entries: [],
+  ecoDrivers: [],
   currentUser: null,
 };
 
@@ -123,6 +129,9 @@ export default function LeaderboardScreen() {
           <ThemedText style={{ color: palette.text }}>
             Saved {formatCo2(entry.totalCo2SavedKg)} | emitted {formatCo2(entry.totalCo2Kg)}
           </ThemedText>
+          <ThemedText style={{ color: palette.muted }}>
+            Carpools {entry.completedCarpools} | riders helped {entry.ridersHelped}
+          </ThemedText>
           {entry.lastTripAt ? (
             <ThemedText style={{ color: palette.muted }}>Last trip {formatTripDate(entry.lastTripAt)}</ThemedText>
           ) : null}
@@ -173,6 +182,21 @@ export default function LeaderboardScreen() {
           </View>
         </View>
 
+        <View style={styles.summaryRow}>
+          <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Live carpools</ThemedText>
+            <ThemedText style={{ color: palette.text, fontSize: 22, fontWeight: '700' }}>
+              {leaderboard.summary.liveCarpools}
+            </ThemedText>
+          </View>
+          <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Riders helped</ThemedText>
+            <ThemedText style={{ color: palette.text, fontSize: 22, fontWeight: '700' }}>
+              {leaderboard.summary.totalRidersHelped}
+            </ThemedText>
+          </View>
+        </View>
+
         {isLoading ? (
           <View style={[styles.loadingCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
             <ActivityIndicator color={palette.accent} />
@@ -204,6 +228,9 @@ export default function LeaderboardScreen() {
                 </ThemedText>
                 <ThemedText style={{ color: palette.muted }}>
                   {formatCo2(currentUser.totalCo2SavedKg)} saved across {currentUser.totalTrips} trips.
+                </ThemedText>
+                <ThemedText style={{ color: palette.muted }}>
+                  Carpools completed {currentUser.completedCarpools} | riders helped {currentUser.ridersHelped}
                 </ThemedText>
                 {currentUser.rank === 1 ? (
                   <ThemedText style={{ color: palette.accent }}>
@@ -242,6 +269,30 @@ export default function LeaderboardScreen() {
                 </View>
               ))}
             </View>
+
+            {leaderboard.ecoDrivers.length > 0 ? (
+              <View style={[styles.podiumCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                <ThemedText type="subtitle" style={{ color: palette.text }}>
+                  Top eco-drivers
+                </ThemedText>
+                {leaderboard.ecoDrivers.map((driver) => (
+                  <View key={driver.userId} style={styles.podiumRow}>
+                    <MaterialIcons name="groups" size={20} color={palette.accent} />
+                    <View style={{ flex: 1 }}>
+                      <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
+                        {driver.displayName}
+                      </ThemedText>
+                      <ThemedText style={{ color: palette.muted }}>
+                        {driver.completedCarpools} carpools | {driver.ridersHelped} riders helped
+                      </ThemedText>
+                    </View>
+                    <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
+                      {formatCo2(driver.totalCarpoolCo2SavedKg)}
+                    </ThemedText>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             <ThemedText type="subtitle" style={{ color: palette.text }}>
               Full ranking
@@ -347,4 +398,3 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
 });
-

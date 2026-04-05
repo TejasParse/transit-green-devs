@@ -45,3 +45,15 @@ export function formatTripDate(dateString: string) {
     minute: '2-digit',
   });
 }
+
+export function formatCurrency(amount: number) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+export function formatMultiplier(value: number) {
+  return `${value.toFixed(1)}x`;
+}

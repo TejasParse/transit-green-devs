@@ -6,12 +6,19 @@ const GOOGLE_ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRo
 const SOLO_DRIVE_CO2_PER_KM = 0.192;
 const ESTIMATED_TRANSIT_CO2_PER_KM = 0.05;
 const GASOLINE_CO2_PER_LITER = 2.31;
-const ROUTE_PRIORITY: RouteKind[] = ['walk', 'bike', 'transit', 'drive'];
+const ROUTE_PRIORITY: RouteKind[] = ['walk', 'bike', 'transit', 'carpool', 'drive'];
+const GOOGLE_ROUTE_PRIORITY: Array<Exclude<RouteKind, 'carpool'>> = [
+  'walk',
+  'bike',
+  'transit',
+  'drive',
+];
 
 const ROUTE_COLORS: Record<RouteKind, string> = {
   walk: '#3D9B63',
   bike: '#2B73C6',
   transit: '#C77722',
+  carpool: '#B85C25',
   drive: '#20744A',
 };
 
@@ -67,8 +74,14 @@ type BuildRoutePlanParams = {
   destinationLabel: string;
 };
 
+type BuildDriveRouteWithStopsParams = {
+  origin: WaypointInput;
+  destination: WaypointInput;
+  stops: WaypointInput[];
+};
+
 type ModeFetchResult = {
-  kind: RouteKind;
+  kind: Exclude<RouteKind, 'carpool'>;
   routes: GoogleRoute[];
 };
 
@@ -264,7 +277,7 @@ function dedupeRoutes(routes: GoogleRoute[]) {
   });
 }
 
-function getTravelMode(kind: RouteKind): GoogleTravelMode {
+function getTravelMode(kind: Exclude<RouteKind, 'carpool'>): GoogleTravelMode {
   switch (kind) {
     case 'walk':
       return 'WALK';
@@ -277,7 +290,12 @@ function getTravelMode(kind: RouteKind): GoogleTravelMode {
   }
 }
 
-function buildRouteRequest(kind: RouteKind, origin: WaypointInput, destination: WaypointInput) {
+function buildRouteRequest(
+  kind: Exclude<RouteKind, 'carpool'>,
+  origin: WaypointInput,
+  destination: WaypointInput,
+  intermediates: WaypointInput[] = []
+) {
   const requestBody: Record<string, unknown> = {
     origin: toWaypoint(origin),
     destination: toWaypoint(destination),
@@ -286,6 +304,10 @@ function buildRouteRequest(kind: RouteKind, origin: WaypointInput, destination: 
     languageCode: 'en-US',
     polylineQuality: 'OVERVIEW',
   };
+
+  if (intermediates.length > 0) {
+    requestBody.intermediates = intermediates.map((waypoint) => toWaypoint(waypoint));
+  }
 
   if (kind === 'drive') {
     requestBody.computeAlternativeRoutes = true;
@@ -308,9 +330,10 @@ function buildRouteRequest(kind: RouteKind, origin: WaypointInput, destination: 
 }
 
 async function fetchRoutesForMode(
-  kind: RouteKind,
+  kind: Exclude<RouteKind, 'carpool'>,
   origin: WaypointInput,
-  destination: WaypointInput
+  destination: WaypointInput,
+  intermediates: WaypointInput[] = []
 ): Promise<ModeFetchResult> {
   const apiKey = getGoogleMapsApiKey();
   const response = await fetch(GOOGLE_ROUTES_URL, {
@@ -321,7 +344,7 @@ async function fetchRoutesForMode(
       'X-Goog-FieldMask':
         'routes.distanceMeters,routes.duration,routes.description,routes.routeLabels,routes.polyline.encodedPolyline,routes.travelAdvisory.fuelConsumptionMicroliters,routes.legs.startLocation,routes.legs.endLocation',
     },
-    body: JSON.stringify(buildRouteRequest(kind, origin, destination)),
+    body: JSON.stringify(buildRouteRequest(kind, origin, destination, intermediates)),
   });
 
   if (!response.ok) {
@@ -339,7 +362,7 @@ async function fetchRoutesForMode(
   };
 }
 
-function choosePreferredRoute(kind: RouteKind, routes: GoogleRoute[]) {
+function choosePreferredRoute(kind: Exclude<RouteKind, 'carpool'>, routes: GoogleRoute[]) {
   if (routes.length === 0) {
     return null;
   }
@@ -373,11 +396,44 @@ function getModeBadges(kind: RouteKind, driveReferenceCo2Kg: number, driveAltern
       return ['Near-zero CO2', 'Active travel'];
     case 'transit':
       return ['Shared ride', 'Low carbon'];
+    case 'carpool':
+      return ['Shared ride', 'Seat-by-seat impact'];
     case 'drive':
       return driveAlternativeCo2Kg && driveAlternativeCo2Kg > driveReferenceCo2Kg
         ? ['Fuel-efficient', 'Car navigation']
         : ['Car navigation'];
   }
+}
+
+export async function buildDriveRouteWithStops({
+  origin,
+  destination,
+  stops,
+}: BuildDriveRouteWithStopsParams): Promise<RouteOption> {
+  const { routes } = await fetchRoutesForMode('drive', origin, destination, stops);
+
+  if (routes.length === 0) {
+    throw new Error('Google Maps did not return a drivable carpool route with the requested stops.');
+  }
+
+  const preferredDriveRoute = choosePreferredRoute('drive', routes);
+
+  if (!preferredDriveRoute) {
+    throw new Error('Google Maps returned detour data, but no usable shared driving route could be derived.');
+  }
+
+  const driveReferenceCo2Kg = estimateDriveCo2Kg(preferredDriveRoute);
+  const alternativeDriveRoute = routes.find((route) => route !== preferredDriveRoute) ?? null;
+  const alternativeDriveCo2Kg = alternativeDriveRoute ? estimateDriveCo2Kg(alternativeDriveRoute) : null;
+  const fuelEfficientDrive = Boolean(preferredDriveRoute.routeLabels?.includes('FUEL_EFFICIENT'));
+
+  return buildRouteOption(
+    'drive',
+    preferredDriveRoute,
+    driveReferenceCo2Kg,
+    alternativeDriveCo2Kg,
+    fuelEfficientDrive
+  );
 }
 
 function getRouteCopy(kind: RouteKind, fuelEfficientDrive: boolean) {
@@ -399,6 +455,12 @@ function getRouteCopy(kind: RouteKind, fuelEfficientDrive: boolean) {
         title: 'Public transit',
         subtitle: 'Lower-emission shared travel option',
         fallbackSummary: 'Public transit route with estimated shared-trip emissions.',
+      };
+    case 'carpool':
+      return {
+        title: 'Carpool',
+        subtitle: 'Shared driving that lowers solo-emission impact',
+        fallbackSummary: 'Share a seat with drivers already headed your way.',
       };
     case 'drive':
       return {
@@ -478,6 +540,8 @@ function getModeLabel(kind: RouteKind) {
       return 'Bike';
     case 'transit':
       return 'Public transit';
+    case 'carpool':
+      return 'Carpool';
     case 'drive':
       return 'Driving';
   }
@@ -490,15 +554,15 @@ export async function buildRoutePlan({
   destinationLabel,
 }: BuildRoutePlanParams): Promise<RoutePlan> {
   const notices: string[] = [];
-  const modeErrors = new Map<RouteKind, string>();
+  const modeErrors = new Map<Exclude<RouteKind, 'carpool'>, string>();
   const settledResults = await Promise.allSettled(
-    ROUTE_PRIORITY.map((kind) => fetchRoutesForMode(kind, origin, destination))
+    GOOGLE_ROUTE_PRIORITY.map((kind) => fetchRoutesForMode(kind, origin, destination))
   );
 
   const modeResults = new Map<RouteKind, GoogleRoute[]>();
 
   settledResults.forEach((result, index) => {
-    const kind = ROUTE_PRIORITY[index];
+    const kind = GOOGLE_ROUTE_PRIORITY[index];
 
     if (result.status === 'fulfilled') {
       modeResults.set(result.value.kind, result.value.routes);
@@ -554,7 +618,7 @@ export async function buildRoutePlan({
 
   const options: RouteOption[] = [];
 
-  ROUTE_PRIORITY.forEach((kind) => {
+  GOOGLE_ROUTE_PRIORITY.forEach((kind) => {
     const routes = modeResults.get(kind) ?? [];
     const preferredRoute = kind === 'drive' ? preferredDriveRoute : choosePreferredRoute(kind, routes);
 

@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
+import { CarpoolNotificationProvider } from '@/context/carpool-notification-context';
 import { UserProvider } from '@/context/user-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -15,13 +16,15 @@ export default function RootLayout() {
 
   return (
     <UserProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        </Stack>
-        <StatusBar style="auto" />
-      </ThemeProvider>
+      <CarpoolNotificationProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          </Stack>
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </CarpoolNotificationProvider>
     </UserProvider>
   );
 }

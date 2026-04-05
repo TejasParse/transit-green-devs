@@ -413,15 +413,28 @@ async function seedTrips(profileIdMap) {
 
 async function seedTripUsers(profileIdMap, tripIdMap) {
   for (const tripUser of demoTripUsers) {
+    const driverId = profileIdMap.get(tripUser.driverKey);
+    const riderId = profileIdMap.get(tripUser.riderKey);
+
     await pool.query(
       `
-        INSERT INTO trip_users (trip_id, driver_id, rider_id)
-        VALUES ($1, $2, $3)
+        INSERT INTO trip_users (
+          trip_id,
+          driver_id,
+          rider_id,
+          user_id,
+          participant_role,
+          joined_at
+        )
+        VALUES ($1, $2, $3, $3, $4, NOW())
+        ON CONFLICT (trip_id, rider_id)
+        DO NOTHING
       `,
       [
         tripIdMap.get(tripUser.tripKey),
-        profileIdMap.get(tripUser.driverKey),
-        profileIdMap.get(tripUser.riderKey),
+        driverId,
+        riderId,
+        driverId === riderId ? 'driver' : 'rider',
       ]
     );
   }

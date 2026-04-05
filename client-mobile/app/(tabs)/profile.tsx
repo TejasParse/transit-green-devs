@@ -14,14 +14,27 @@ import { useIsFocused } from '@react-navigation/native';
 
 import { ThemedText } from '@/components/themed-text';
 import { useUserProfile } from '@/context/user-context';
-import { fetchUserDashboard, fetchUserTrips, plantForestTree } from '@/lib/api';
-import { formatCo2, formatDistance, formatDuration, formatTripDate } from '@/lib/formatters';
+import {
+  acceptCarpoolRequest,
+  cancelCarpool,
+  cancelCarpoolRequest,
+  completeCarpool,
+  fetchUserDashboard,
+  fetchUserTrips,
+  plantForestTree,
+  rejectCarpoolRequest,
+  startCarpool,
+} from '@/lib/api';
+import { getCarpoolRoleStatus } from '@/lib/carpool-status';
+import { formatCo2, formatDistance, formatDuration, formatMultiplier, formatTripDate } from '@/lib/formatters';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import {
   ForestTree,
   UserDashboard,
 } from '@/types/dashboard';
 import { TripRecord } from '@/types/trips';
+
+const CARPOOL_POLL_INTERVAL_MS = 5000;
 
 type ForestCellSelection = {
   x: number;
@@ -118,8 +131,18 @@ function findFirstEmptyCell(
 export default function ProfileScreen() {
   const colorScheme = useColorScheme();
   const isFocused = useIsFocused();
-  const { userId, displayName, setDisplayName, tripVersion } = useUserProfile();
+  const {
+    userId,
+    displayName,
+    setDisplayName,
+    activeProfile,
+    availableProfiles,
+    loginWithUsername,
+    tripVersion,
+    notifyTripSaved,
+  } = useUserProfile();
   const [draftName, setDraftName] = useState(displayName);
+  const [loginName, setLoginName] = useState(displayName);
   const [dashboard, setDashboard] = useState<UserDashboard | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
@@ -132,6 +155,11 @@ export default function ProfileScreen() {
   const [selectedForestCell, setSelectedForestCell] = useState<ForestCellSelection>(null);
   const [plantError, setPlantError] = useState<string | null>(null);
   const [isPlanting, setIsPlanting] = useState(false);
+  const [carpoolActionError, setCarpoolActionError] = useState<string | null>(null);
+  const [carpoolActionMessage, setCarpoolActionMessage] = useState<string | null>(null);
+  const [carpoolActionKey, setCarpoolActionKey] = useState<string | null>(null);
+  const [loginMessage, setLoginMessage] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const palette =
     colorScheme === 'dark'
@@ -168,9 +196,71 @@ export default function ProfileScreen() {
           warningSurface: '#FFF7E9',
         };
 
+  function getCarpoolStatusColors(tone: ReturnType<typeof getCarpoolRoleStatus>['tone']) {
+    if (tone === 'accent') {
+      return {
+        backgroundColor: colorScheme === 'dark' ? 'rgba(77, 168, 109, 0.16)' : '#EFF8F1',
+        borderColor: colorScheme === 'dark' ? '#2B6A43' : '#CAE6D1',
+        iconColor: palette.accent,
+        badgeBackgroundColor: colorScheme === 'dark' ? '#183623' : '#DFF1E4',
+      };
+    }
+
+    if (tone === 'warning') {
+      return {
+        backgroundColor: colorScheme === 'dark' ? 'rgba(214, 164, 75, 0.16)' : '#FFF6E8',
+        borderColor: colorScheme === 'dark' ? '#7C5A1B' : '#F1DBB1',
+        iconColor: palette.accentAlt,
+        badgeBackgroundColor: colorScheme === 'dark' ? '#3D2B11' : '#FCE8BF',
+      };
+    }
+
+    if (tone === 'success') {
+      return {
+        backgroundColor: colorScheme === 'dark' ? 'rgba(64, 180, 120, 0.14)' : '#ECF9F0',
+        borderColor: colorScheme === 'dark' ? '#276845' : '#CBE7D5',
+        iconColor: palette.accent,
+        badgeBackgroundColor: colorScheme === 'dark' ? '#173123' : '#DDF2E4',
+      };
+    }
+
+    return {
+      backgroundColor: colorScheme === 'dark' ? '#161E19' : '#F4F7F3',
+      borderColor: palette.border,
+      iconColor: palette.muted,
+      badgeBackgroundColor: colorScheme === 'dark' ? '#213029' : '#E8EDE7',
+    };
+  }
+
+  function formatCarpoolTrustSummary(trip: UserDashboard['carpools']['trips'][number]) {
+    if (trip.trustSignals.ratingCount > 0) {
+      return `${trip.trustSignals.ratingAverage.toFixed(1)} stars`;
+    }
+
+    if (trip.trustSignals.ridesCompleted > 0) {
+      return `${trip.trustSignals.ridesCompleted} rides`;
+    }
+
+    return 'New driver';
+  }
+
   useEffect(() => {
     setDraftName(displayName);
+    setLoginName(displayName);
   }, [displayName]);
+
+  function handleUsernameLogin() {
+    const result = loginWithUsername(loginName);
+
+    if (!result.ok) {
+      setLoginError(result.error);
+      setLoginMessage(null);
+      return;
+    }
+
+    setLoginError(null);
+    setLoginMessage(`Signed in as ${loginName.trim() || activeProfile.displayName}.`);
+  }
 
   useEffect(() => {
     if (!isFocused) {
@@ -179,8 +269,11 @@ export default function ProfileScreen() {
 
     let isMounted = true;
 
-    async function loadDashboard() {
-      setIsDashboardLoading(true);
+    async function loadDashboard(options?: { silent?: boolean }) {
+      if (!options?.silent) {
+        setIsDashboardLoading(true);
+      }
+
       setDashboardError(null);
 
       try {
@@ -195,16 +288,20 @@ export default function ProfileScreen() {
           );
         }
       } finally {
-        if (isMounted) {
+        if (isMounted && !options?.silent) {
           setIsDashboardLoading(false);
         }
       }
     }
 
     void loadDashboard();
+    const intervalId = setInterval(() => {
+      void loadDashboard({ silent: true });
+    }, CARPOOL_POLL_INTERVAL_MS);
 
     return () => {
       isMounted = false;
+      clearInterval(intervalId);
     };
   }, [isFocused, tripVersion, userId]);
 
@@ -246,6 +343,8 @@ export default function ProfileScreen() {
   const forest = dashboard?.forest ?? null;
   const achievements = dashboard?.achievements ?? [];
   const recentTrips = dashboard?.recentTrips ?? [];
+  const carpoolSummary = dashboard?.carpools.summary ?? null;
+  const myCarpools = dashboard?.carpools.trips ?? [];
   const forestCapacity = forest ? forest.gridColumns * forest.gridRows : 0;
   const isForestFull = forest ? forest.totalTrees >= forestCapacity : false;
   const selectedTree =
@@ -293,6 +392,30 @@ export default function ProfileScreen() {
       setPlantError(error instanceof Error ? error.message : 'Unable to plant a tree right now.');
     } finally {
       setIsPlanting(false);
+    }
+  }
+
+  async function refreshDashboardSnapshot() {
+    const nextDashboard = await fetchUserDashboard(userId);
+    setDashboard(nextDashboard);
+  }
+
+  async function handleCarpoolAction(actionKey: string, task: () => Promise<unknown>) {
+    setCarpoolActionKey(actionKey);
+    setCarpoolActionError(null);
+    setCarpoolActionMessage(null);
+
+    try {
+      await task();
+      await refreshDashboardSnapshot();
+      notifyTripSaved();
+      setCarpoolActionMessage('Carpool details updated.');
+    } catch (error) {
+      setCarpoolActionError(
+        error instanceof Error ? error.message : 'Unable to update this carpool right now.'
+      );
+    } finally {
+      setCarpoolActionKey(null);
     }
   }
 
@@ -446,6 +569,165 @@ export default function ProfileScreen() {
     ));
   }
 
+  function renderCarpoolActions(trip: UserDashboard['carpools']['trips'][number]) {
+    const isDriver = trip.currentUserRole === 'driver';
+    const pendingRequests = trip.requests?.filter((request) => request.status === 'pending') ?? [];
+    const canStart = isDriver && trip.status === 'confirmed' && trip.acceptedRiders > 0;
+    const canComplete = isDriver && trip.status === 'active';
+    const canCancelTrip = isDriver && ['draft', 'scheduled', 'confirmed', 'active'].includes(trip.status);
+    const canCancelRequest =
+      !isDriver &&
+      trip.currentUserRequest != null &&
+      ['pending', 'accepted'].includes(trip.currentUserRequest.status);
+
+    return (
+      <View style={styles.carpoolActionGroup}>
+        {pendingRequests.map((request) => {
+          const acceptKey = `accept-${trip.id}-${request.id}`;
+          const rejectKey = `reject-${trip.id}-${request.id}`;
+
+          return (
+            <View
+              key={request.id}
+              style={[
+                styles.carpoolPendingRequestCard,
+                { backgroundColor: palette.cardSecondary, borderColor: palette.border },
+              ]}>
+              <ThemedText style={[styles.tripTitle, { color: palette.text }]}>
+                {request.riderName ?? `Rider #${request.riderId}`}
+              </ThemedText>
+              <ThemedText style={{ color: palette.muted }}>
+                Adds about {request.estimatedAddedMinutes} min | {request.riderOriginLabel} to{' '}
+                {request.riderDestinationLabel}
+              </ThemedText>
+              <View style={styles.carpoolInlineActions}>
+                <Pressable
+                  onPress={() =>
+                    void handleCarpoolAction(acceptKey, () =>
+                      acceptCarpoolRequest(trip.id, request.id, userId)
+                    )
+                  }
+                  style={[styles.carpoolDecisionButton, { backgroundColor: palette.accent }]}
+                  disabled={carpoolActionKey === acceptKey || carpoolActionKey === rejectKey}>
+                  <ThemedText style={[styles.primaryActionText, { color: '#FFFFFF' }]}>
+                    {carpoolActionKey === acceptKey ? 'Accepting...' : 'Accept'}
+                  </ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={() =>
+                    void handleCarpoolAction(rejectKey, () =>
+                      rejectCarpoolRequest(trip.id, request.id, userId)
+                    )
+                  }
+                  style={[styles.carpoolDecisionButton, { backgroundColor: palette.accentAlt }]}
+                  disabled={carpoolActionKey === acceptKey || carpoolActionKey === rejectKey}>
+                  <ThemedText style={[styles.primaryActionText, { color: '#FFFFFF' }]}>
+                    {carpoolActionKey === rejectKey ? 'Rejecting...' : 'Reject'}
+                  </ThemedText>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })}
+
+        {isDriver && trip.status === 'scheduled' ? (
+          <View
+            style={[
+              styles.messageCard,
+              { backgroundColor: palette.cardSecondary, borderColor: palette.border },
+            ]}>
+            <MaterialIcons name="groups" size={18} color={palette.accent} />
+            <ThemedText style={{ color: palette.text, flex: 1 }}>
+              Accept a rider first. Once the trip is confirmed, both devices can run the live shared ride simulation from the carpool tab.
+            </ThemedText>
+          </View>
+        ) : null}
+
+        {!isDriver &&
+        trip.currentUserRequest?.status === 'accepted' &&
+        ['scheduled', 'confirmed'].includes(trip.status) ? (
+          <View
+            style={[
+              styles.messageCard,
+              { backgroundColor: palette.cardSecondary, borderColor: palette.border },
+            ]}>
+            <MaterialIcons name="hourglass-top" size={18} color={palette.accentAlt} />
+            <ThemedText style={{ color: palette.text, flex: 1 }}>
+              Your seat is confirmed. The driver still needs to start the carpool before the live ride simulation begins on both devices.
+            </ThemedText>
+          </View>
+        ) : null}
+
+        {!isDriver && trip.currentUserRequest?.status === 'accepted' && trip.status === 'active' ? (
+          <View
+            style={[
+              styles.messageCard,
+              { backgroundColor: palette.cardSecondary, borderColor: palette.border },
+            ]}>
+            <MaterialIcons name="navigation" size={18} color={palette.accent} />
+            <ThemedText style={{ color: palette.text, flex: 1 }}>
+              The shared ride is live now. Open the carpool tab on the map screen to follow the trip on this device.
+            </ThemedText>
+          </View>
+        ) : null}
+
+        <View style={styles.carpoolInlineActions}>
+          {canStart ? (
+            <Pressable
+              onPress={() => void handleCarpoolAction(`start-${trip.id}`, () => startCarpool(trip.id, userId))}
+              style={[styles.carpoolDecisionButton, { backgroundColor: palette.accent }]}
+              disabled={carpoolActionKey === `start-${trip.id}`}>
+              <ThemedText style={[styles.primaryActionText, { color: '#FFFFFF' }]}>
+                {carpoolActionKey === `start-${trip.id}` ? 'Starting...' : 'Start'}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+
+          {canComplete ? (
+            <Pressable
+              onPress={() =>
+                void handleCarpoolAction(`complete-${trip.id}`, () => completeCarpool(trip.id, userId))
+              }
+              style={[styles.carpoolDecisionButton, { backgroundColor: palette.accent }]}
+              disabled={carpoolActionKey === `complete-${trip.id}`}>
+              <ThemedText style={[styles.primaryActionText, { color: '#FFFFFF' }]}>
+                {carpoolActionKey === `complete-${trip.id}` ? 'Completing...' : 'Complete'}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+
+          {canCancelTrip ? (
+            <Pressable
+              onPress={() =>
+                void handleCarpoolAction(`cancel-trip-${trip.id}`, () => cancelCarpool(trip.id, userId))
+              }
+              style={[styles.carpoolDecisionButton, { backgroundColor: palette.accentAlt }]}
+              disabled={carpoolActionKey === `cancel-trip-${trip.id}`}>
+              <ThemedText style={[styles.primaryActionText, { color: '#FFFFFF' }]}>
+                {carpoolActionKey === `cancel-trip-${trip.id}` ? 'Cancelling...' : 'Cancel ride'}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+
+          {canCancelRequest && trip.currentUserRequest ? (
+            <Pressable
+              onPress={() =>
+                void handleCarpoolAction(`cancel-request-${trip.id}`, () =>
+                  cancelCarpoolRequest(trip.id, trip.currentUserRequest!.id, userId)
+                )
+              }
+              style={[styles.carpoolDecisionButton, { backgroundColor: palette.accentAlt }]}
+              disabled={carpoolActionKey === `cancel-request-${trip.id}`}>
+              <ThemedText style={[styles.primaryActionText, { color: '#FFFFFF' }]}>
+                {carpoolActionKey === `cancel-request-${trip.id}` ? 'Cancelling...' : 'Cancel request'}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -575,6 +857,234 @@ export default function ProfileScreen() {
                 </ThemedText>
               </View>
             </View>
+
+            {carpoolSummary ? (
+              <View style={styles.sectionBlock}>
+                <View style={styles.sectionHeaderInline}>
+                  <ThemedText type="subtitle" style={{ color: palette.text }}>
+                    My Carpools
+                  </ThemedText>
+                  <ThemedText style={{ color: palette.muted }}>
+                    Active, scheduled, and completed shared rides live here.
+                  </ThemedText>
+                </View>
+
+                <View style={styles.summaryGrid}>
+                  <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Active</ThemedText>
+                    <ThemedText style={[styles.summaryValue, { color: palette.text }]}>
+                      {carpoolSummary.activeTrips}
+                    </ThemedText>
+                  </View>
+                  <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Completed</ThemedText>
+                    <ThemedText style={[styles.summaryValue, { color: palette.text }]}>
+                      {carpoolSummary.completedTrips}
+                    </ThemedText>
+                  </View>
+                  <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Riders helped</ThemedText>
+                    <ThemedText style={[styles.summaryValue, { color: palette.text }]}>
+                      {carpoolSummary.totalRidersHelped}
+                    </ThemedText>
+                  </View>
+                  <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Best impact</ThemedText>
+                    <ThemedText style={[styles.summaryValue, { color: palette.text }]}>
+                      {formatMultiplier(carpoolSummary.highestImpactMultiplier)}
+                    </ThemedText>
+                  </View>
+                </View>
+
+                {carpoolActionMessage ? (
+                  <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <MaterialIcons name="check-circle-outline" size={20} color={palette.accent} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>{carpoolActionMessage}</ThemedText>
+                  </View>
+                ) : null}
+
+                {carpoolActionError ? (
+                  <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>{carpoolActionError}</ThemedText>
+                  </View>
+                ) : null}
+
+                {myCarpools.length === 0 ? (
+                  <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                    <MaterialIcons name="groups" size={20} color={palette.accent} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>
+                      Publish a carpool from the map tab or request a seat to start building shared rides.
+                    </ThemedText>
+                  </View>
+                ) : (
+                  myCarpools.map((trip) => {
+                    const roleStatus = getCarpoolRoleStatus(trip, userId);
+                    const statusColors = getCarpoolStatusColors(roleStatus.tone);
+
+                    return (
+                      <View
+                        key={trip.id}
+                        style={[styles.tripCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+                        <View style={styles.tripHeader}>
+                          <View style={{ flex: 1, gap: 4 }}>
+                            <ThemedText style={[styles.tripTitle, { color: palette.text }]}>
+                              {trip.routeTitle}
+                            </ThemedText>
+                            <ThemedText style={{ color: palette.muted }}>
+                              {trip.originLabel} to {trip.destinationLabel}
+                            </ThemedText>
+                          </View>
+                          <View style={[styles.routeTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
+                            <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>
+                              {trip.currentUserRole}
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        <View style={styles.tripMetricRow}>
+                          <ThemedText style={{ color: palette.text }}>
+                            {trip.status} | {formatTripDate(trip.departureTime)}
+                          </ThemedText>
+                          <ThemedText style={{ color: palette.text }}>
+                            {trip.availableSeats}/{trip.seatCapacity} seats
+                          </ThemedText>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.carpoolStatusCard,
+                            {
+                              backgroundColor: statusColors.backgroundColor,
+                              borderColor: statusColors.borderColor,
+                            },
+                          ]}>
+                          <MaterialIcons name={roleStatus.icon} size={18} color={statusColors.iconColor} />
+                          <View style={styles.carpoolStatusCopy}>
+                            <View
+                              style={[
+                                styles.carpoolStatusBadge,
+                                {
+                                  backgroundColor: statusColors.badgeBackgroundColor,
+                                },
+                              ]}>
+                              <ThemedText
+                                style={[
+                                  styles.carpoolStatusBadgeText,
+                                  { color: statusColors.iconColor },
+                                ]}>
+                                {roleStatus.badge}
+                              </ThemedText>
+                            </View>
+                            <ThemedText style={[styles.tripTitle, { color: palette.text }]}>
+                              {roleStatus.title}
+                            </ThemedText>
+                            <ThemedText style={{ color: palette.muted }}>
+                              {roleStatus.description}
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        <View style={styles.carpoolInsightPillRow}>
+                          <View
+                            style={[
+                              styles.carpoolInsightPill,
+                              {
+                                backgroundColor: `${palette.accent}14`,
+                                borderColor: `${palette.accent}30`,
+                              },
+                            ]}>
+                            <MaterialIcons name="event" size={14} color={palette.accent} />
+                            <ThemedText style={{ color: palette.text }}>
+                              {formatTripDate(trip.departureTime)}
+                            </ThemedText>
+                          </View>
+                          <View
+                            style={[
+                              styles.carpoolInsightPill,
+                              {
+                                backgroundColor: `${palette.accentAlt}14`,
+                                borderColor: `${palette.accentAlt}28`,
+                              },
+                            ]}>
+                            <MaterialIcons name="payments" size={14} color={palette.accentAlt} />
+                            <ThemedText style={{ color: palette.text }}>
+                              ${trip.pricePerMileUsd.toFixed(2)}/mi
+                            </ThemedText>
+                          </View>
+                          <View
+                            style={[
+                              styles.carpoolInsightPill,
+                              {
+                                backgroundColor: `${palette.accent}14`,
+                                borderColor: `${palette.accent}30`,
+                              },
+                            ]}>
+                            <MaterialIcons name="verified-user" size={14} color={palette.accent} />
+                            <ThemedText style={{ color: palette.text }}>
+                              {formatCarpoolTrustSummary(trip)}
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        <View style={styles.carpoolInsightPillRow}>
+                          <View
+                            style={[
+                              styles.carpoolInsightPill,
+                              {
+                                backgroundColor: `${palette.accent}14`,
+                                borderColor: `${palette.accent}30`,
+                              },
+                            ]}>
+                            <MaterialIcons name="eco" size={14} color={palette.accent} />
+                            <ThemedText style={{ color: palette.text }}>
+                              {formatCo2(trip.co2SavedKg)} shared savings
+                            </ThemedText>
+                          </View>
+                          <View
+                            style={[
+                              styles.carpoolInsightPill,
+                              {
+                                backgroundColor: `${palette.accentAlt}14`,
+                                borderColor: `${palette.accentAlt}28`,
+                              },
+                            ]}>
+                            <MaterialIcons name="military-tech" size={14} color={palette.accentAlt} />
+                            <ThemedText style={{ color: palette.text }}>
+                              {formatMultiplier(trip.carpoolImpactMultiplier ?? 1)} impact
+                            </ThemedText>
+                          </View>
+                          <View
+                            style={[
+                              styles.carpoolInsightPill,
+                              {
+                                backgroundColor: `${palette.accent}14`,
+                                borderColor: `${palette.accent}30`,
+                              },
+                            ]}>
+                            <MaterialIcons name="diversity-3" size={14} color={palette.accent} />
+                            <ThemedText style={{ color: palette.text }}>
+                              {trip.participantCount} participant{trip.participantCount === 1 ? '' : 's'}
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        <ThemedText style={{ color: palette.muted }}>
+                          Driver: {trip.driverName} | {trip.pricePerMileUsd.toFixed(2)}/mi | {trip.participantCount}{' '}
+                          participant{trip.participantCount === 1 ? '' : 's'}
+                        </ThemedText>
+                        <ThemedText style={{ color: palette.muted }}>
+                          Shared CO2 savings {formatCo2(trip.co2SavedKg)} | impact{' '}
+                          {formatMultiplier(trip.carpoolImpactMultiplier ?? 1)}
+                        </ThemedText>
+
+                        {renderCarpoolActions(trip)}
+                      </View>
+                    );
+                  })
+                )}
+              </View>
+            ) : null}
 
             {forest ? (
               <View style={[styles.sectionCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
@@ -835,10 +1345,86 @@ export default function ProfileScreen() {
 
             <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
               <ThemedText type="subtitle" style={{ color: palette.text }}>
+                Username Login
+              </ThemedText>
+              <ThemedText style={{ color: palette.muted }}>
+                Enter a known username and this simulator will switch to that profile.
+              </ThemedText>
+
+              <TextInput
+                value={loginName}
+                onChangeText={setLoginName}
+                placeholder="Enter username"
+                placeholderTextColor={palette.muted}
+                autoCapitalize="words"
+                autoCorrect={false}
+                style={[
+                  styles.input,
+                  {
+                    color: palette.text,
+                    backgroundColor: palette.input,
+                    borderColor: palette.border,
+                  },
+                ]}
+              />
+              <Pressable
+                onPress={handleUsernameLogin}
+                style={[styles.saveButton, { backgroundColor: palette.accent }]}>
+                <MaterialIcons name="login" size={20} color="#FFFFFF" />
+                <ThemedText style={styles.saveButtonText}>Switch with username</ThemedText>
+              </Pressable>
+
+              {loginMessage ? (
+                <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
+                  <MaterialIcons name="check-circle-outline" size={20} color={palette.accent} />
+                  <ThemedText style={{ color: palette.text, flex: 1 }}>{loginMessage}</ThemedText>
+                </View>
+              ) : null}
+
+              {loginError ? (
+                <View style={[styles.messageCard, { backgroundColor: palette.errorSurface, borderColor: palette.border }]}>
+                  <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
+                  <ThemedText style={{ color: palette.text, flex: 1 }}>{loginError}</ThemedText>
+                </View>
+              ) : null}
+
+              <View style={styles.userNameList}>
+                {availableProfiles.map((profile) => {
+                  const isSelected = profile.userId === userId;
+
+                  return (
+                    <Pressable
+                      key={profile.userId}
+                      onPress={() => setLoginName(profile.displayName)}
+                      style={[
+                        styles.userNameChip,
+                        {
+                          backgroundColor: isSelected ? palette.accentSoft : palette.input,
+                          borderColor: isSelected ? palette.accent : palette.border,
+                        },
+                      ]}>
+                      <ThemedText
+                        style={{
+                          color: isSelected ? palette.accent : palette.text,
+                          fontWeight: '700',
+                        }}>
+                        {profile.displayName}
+                      </ThemedText>
+                      <ThemedText style={{ color: palette.muted, flex: 1 }}>
+                        {profile.canDrive ? 'Driver-ready' : 'Rider-ready'}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <ThemedText type="subtitle" style={{ color: palette.text }}>
                 Rider Details
               </ThemedText>
               <ThemedText style={{ color: palette.muted }}>
-                This name is used for newly saved trips and the leaderboard.
+                This name is used for newly saved trips and the leaderboard for {activeProfile.displayName}.
               </ThemedText>
               <TextInput
                 value={draftName}
@@ -1477,11 +2063,81 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
   },
+  carpoolStatusCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  carpoolStatusCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  carpoolStatusBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  carpoolStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  carpoolInsightPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  carpoolInsightPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  carpoolActionGroup: {
+    gap: 10,
+  },
+  carpoolPendingRequestCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 12,
+    gap: 8,
+  },
+  carpoolInlineActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  carpoolDecisionButton: {
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   profileCard: {
     borderRadius: 24,
     borderWidth: 1,
     padding: 18,
     gap: 12,
+  },
+  userNameList: {
+    gap: 10,
+  },
+  userNameChip: {
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 4,
   },
   input: {
     borderWidth: 1,

@@ -53,11 +53,29 @@ function readPathPoints(value) {
   });
 }
 
+function readOptionalNonNegativeInteger(value, fieldName) {
+  if (value == null || value === '') {
+    return 0;
+  }
+
+  const parsedValue = Number(value);
+
+  if (!Number.isInteger(parsedValue) || parsedValue < 0) {
+    throw new Error(`${fieldName} must be zero or a positive integer.`);
+  }
+
+  return parsedValue;
+}
+
 function validateTripPayload(body) {
   const metadata =
     body?.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
       ? body.metadata
       : {};
+  const status =
+    typeof body?.status === 'string' && body.status.trim()
+      ? body.status.trim()
+      : 'completed';
 
   return {
     userId: readPositiveInteger(body?.userId, 'userId'),
@@ -73,6 +91,9 @@ function validateTripPayload(body) {
     durationSeconds: Math.round(readNumber(body?.durationSeconds, 'durationSeconds')),
     co2Kg: Number(readNumber(body?.co2Kg, 'co2Kg').toFixed(3)),
     co2SavedKg: Number(readNumber(body?.co2SavedKg, 'co2SavedKg').toFixed(3)),
+    availableSeats: readOptionalNonNegativeInteger(body?.availableSeats, 'availableSeats'),
+    seatCapacity: readOptionalNonNegativeInteger(body?.seatCapacity, 'seatCapacity'),
+    status,
     startedAt: readTimestamp(body?.startedAt, 'startedAt'),
     completedAt: readTimestamp(body?.completedAt, 'completedAt'),
     pathPoints: readPathPoints(body?.pathPoints),
@@ -81,7 +102,9 @@ function validateTripPayload(body) {
 }
 
 module.exports = {
+  readNumber,
   readPositiveInteger,
   readRequiredString,
+  readTimestamp,
   validateTripPayload,
 };
