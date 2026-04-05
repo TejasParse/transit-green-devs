@@ -41,6 +41,12 @@ type ForestCellSelection = {
   y: number;
 } | null;
 
+type HistoryView = 'personal' | 'offered';
+type HistoryTripMeta = {
+  icon: ComponentProps<typeof MaterialIcons>['name'];
+  label: string;
+};
+
 type TreeVisual = {
   badge: string;
   icon: ComponentProps<typeof MaterialIcons>['name'];
@@ -110,6 +116,46 @@ function getGridKey(x: number, y: number) {
   return `${x}:${y}`;
 }
 
+function getHistoryTripMeta(trip: TripRecord): HistoryTripMeta {
+  if (trip.routeType === 'transit') {
+    return {
+      icon: 'directions-transit',
+      label: 'Public Transport',
+    };
+  }
+
+  if (trip.routeType === 'carpool') {
+    return trip.participantRole === 'driver'
+      ? {
+          icon: 'drive-eta',
+          label: 'Ride Offered',
+        }
+      : {
+          icon: 'groups',
+          label: 'Carpool Rider',
+        };
+  }
+
+  if (trip.routeType === 'walk') {
+    return {
+      icon: 'directions-walk',
+      label: 'Walk',
+    };
+  }
+
+  if (trip.routeType === 'drive') {
+    return {
+      icon: 'directions-car',
+      label: 'Drive',
+    };
+  }
+
+  return {
+    icon: 'directions-bike',
+    label: 'Bike',
+  };
+}
+
 function findFirstEmptyCell(
   gridColumns: number,
   gridRows: number,
@@ -150,6 +196,7 @@ export default function ProfileScreen() {
   const [historyTrips, setHistoryTrips] = useState<TripRecord[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyView, setHistoryView] = useState<HistoryView>('personal');
   const [plantModalVisible, setPlantModalVisible] = useState(false);
   const [selectedTreeId, setSelectedTreeId] = useState<string | null>(null);
   const [selectedForestCell, setSelectedForestCell] = useState<ForestCellSelection>(null);
@@ -342,7 +389,6 @@ export default function ProfileScreen() {
   const summary = dashboard?.summary ?? null;
   const forest = dashboard?.forest ?? null;
   const achievements = dashboard?.achievements ?? [];
-  const recentTrips = dashboard?.recentTrips ?? [];
   const carpoolSummary = dashboard?.carpools.summary ?? null;
   const myCarpools = dashboard?.carpools.trips ?? [];
   const forestCapacity = forest ? forest.gridColumns * forest.gridRows : 0;
@@ -350,6 +396,25 @@ export default function ProfileScreen() {
   const selectedTree =
     forest?.treeCatalog.find((treeOption) => treeOption.id === selectedTreeId) ?? null;
   const displayNameForHeader = displayName || summary?.displayName || 'Campus Rider';
+  const personalHistoryTrips = historyTrips.filter(
+    (trip) =>
+      trip.routeType === 'walk' ||
+      trip.routeType === 'bike' ||
+      trip.routeType === 'drive' ||
+      trip.routeType === 'transit' ||
+      (trip.routeType === 'carpool' && trip.participantRole === 'rider')
+  );
+  const offeredHistoryTrips = historyTrips.filter(
+    (trip) => trip.routeType === 'carpool' && trip.participantRole === 'driver'
+  );
+  const activeCarpoolTrips = myCarpools.filter((trip) =>
+    ['draft', 'scheduled', 'confirmed', 'active'].includes(trip.status)
+  );
+
+  function openHistoryModal() {
+    setHistoryView('personal');
+    setHistoryVisible(true);
+  }
 
   function openPlantModal() {
     if (!forest) {
@@ -511,6 +576,8 @@ export default function ProfileScreen() {
   }
 
   function renderHistoryContent() {
+    const filteredTrips = historyView === 'personal' ? personalHistoryTrips : offeredHistoryTrips;
+
     if (isHistoryLoading) {
       return (
         <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
@@ -520,7 +587,7 @@ export default function ProfileScreen() {
       );
     }
 
-    if (historyError && historyTrips.length === 0) {
+    if (historyError && filteredTrips.length === 0) {
       return (
         <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
           <MaterialIcons name="error-outline" size={20} color={palette.accentAlt} />
@@ -529,30 +596,40 @@ export default function ProfileScreen() {
       );
     }
 
-    if (historyTrips.length === 0) {
+    if (filteredTrips.length === 0) {
       return (
         <View style={[styles.messageCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
           <MaterialIcons name="history" size={20} color={palette.accent} />
           <ThemedText style={{ color: palette.text, flex: 1 }}>
-            No trips saved yet. Run a route simulation from the map tab to build your history.
+            {historyView === 'personal'
+              ? 'No personal trips saved yet. Complete a walk, bike, transit, or rider carpool trip to build your history.'
+              : 'No rides offered yet. Publish and complete a carpool as a driver to see it here.'}
           </ThemedText>
         </View>
       );
     }
 
-    return historyTrips.map((trip) => (
+    return filteredTrips.map((trip) => (
       <View
         key={trip.id}
         style={[styles.tripCard, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
         <View style={styles.tripHeader}>
+          {(() => {
+            const tripMeta = getHistoryTripMeta(trip);
+
+            return (
+              <View
+                accessibilityLabel={tripMeta.label}
+                style={[styles.historyTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
+                <MaterialIcons name={tripMeta.icon} size={18} color={palette.accent} />
+              </View>
+            );
+          })()}
           <View style={{ flex: 1 }}>
             <ThemedText style={[styles.tripTitle, { color: palette.text }]}>{trip.routeTitle}</ThemedText>
             <ThemedText style={{ color: palette.muted }}>
               {trip.originLabel} to {trip.destinationLabel}
             </ThemedText>
-          </View>
-          <View style={[styles.routeTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
-            <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>{trip.routeType}</ThemedText>
           </View>
         </View>
 
@@ -741,7 +818,7 @@ export default function ProfileScreen() {
             </ThemedText>
           </View>
           <Pressable
-            onPress={() => setHistoryVisible(true)}
+            onPress={openHistoryModal}
             style={[styles.historyButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
             <MaterialIcons name="history" size={18} color={palette.accent} />
             <ThemedText style={[styles.historyButtonText, { color: palette.text }]}>History</ThemedText>
@@ -865,7 +942,7 @@ export default function ProfileScreen() {
                     My Carpools
                   </ThemedText>
                   <ThemedText style={{ color: palette.muted }}>
-                    Active, scheduled, and completed shared rides live here.
+                    Manage your active and upcoming shared rides here. Completed carpools now live in History.
                   </ThemedText>
                 </View>
 
@@ -910,15 +987,15 @@ export default function ProfileScreen() {
                   </View>
                 ) : null}
 
-                {myCarpools.length === 0 ? (
+                {activeCarpoolTrips.length === 0 ? (
                   <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
                     <MaterialIcons name="groups" size={20} color={palette.accent} />
                     <ThemedText style={{ color: palette.text, flex: 1 }}>
-                      Publish a carpool from the map tab or request a seat to start building shared rides.
+                      No active carpool cards right now. Use the map tab to publish a ride or check History for completed carpools.
                     </ThemedText>
                   </View>
                 ) : (
-                  myCarpools.map((trip) => {
+                  activeCarpoolTrips.map((trip) => {
                     const roleStatus = getCarpoolRoleStatus(trip, userId);
                     const statusColors = getCarpoolStatusColors(roleStatus.tone);
 
@@ -1285,64 +1362,6 @@ export default function ProfileScreen() {
               </View>
             </View>
 
-            <View style={styles.sectionBlock}>
-              <View style={styles.sectionHeaderInline}>
-                <ThemedText type="subtitle" style={{ color: palette.text }}>
-                  Recent Trips
-                </ThemedText>
-                <ThemedText style={{ color: palette.muted }}>
-                  Your latest rides and their individual impact.
-                </ThemedText>
-              </View>
-
-              {recentTrips.length === 0 ? (
-                <View style={[styles.messageCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                  <MaterialIcons name="history" size={20} color={palette.accent} />
-                  <ThemedText style={{ color: palette.text, flex: 1 }}>
-                    No completed trips yet. Simulate a route from the map tab to start building impact.
-                  </ThemedText>
-                </View>
-              ) : (
-                recentTrips.map((trip) => (
-                  <View
-                    key={trip.id}
-                    style={[styles.tripCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
-                    <View style={styles.tripHeader}>
-                      <View style={{ flex: 1 }}>
-                        <ThemedText style={[styles.tripTitle, { color: palette.text }]}>{trip.routeTitle}</ThemedText>
-                        <ThemedText style={{ color: palette.muted }}>
-                          {trip.originLabel} to {trip.destinationLabel}
-                        </ThemedText>
-                      </View>
-                      <View style={[styles.routeTypeBadge, { backgroundColor: `${palette.accent}18` }]}>
-                        <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>{trip.routeType}</ThemedText>
-                      </View>
-                    </View>
-
-                    <View style={styles.tripImpactRow}>
-                      <View style={[styles.tripImpactChip, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                        <ThemedText style={[styles.tripImpactLabel, { color: palette.muted }]}>Saved</ThemedText>
-                        <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
-                          {formatCo2(trip.co2SavedKg)}
-                        </ThemedText>
-                      </View>
-                      <View style={[styles.tripImpactChip, { backgroundColor: palette.input, borderColor: palette.border }]}>
-                        <ThemedText style={[styles.tripImpactLabel, { color: palette.muted }]}>Points</ThemedText>
-                        <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
-                          {formatPoints(getTripPoints(trip))}
-                        </ThemedText>
-                      </View>
-                    </View>
-
-                    <ThemedText style={{ color: palette.muted }}>
-                      {formatTripDate(trip.completedAt)} | {formatDistance(trip.distanceMeters)} |{' '}
-                      {formatDuration(trip.durationSeconds)}
-                    </ThemedText>
-                  </View>
-                ))
-              )}
-            </View>
-
             <View style={[styles.profileCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
               <ThemedText type="subtitle" style={{ color: palette.text }}>
                 Username Login
@@ -1474,13 +1493,52 @@ export default function ProfileScreen() {
                   Trip History
                 </ThemedText>
                 <ThemedText style={{ color: palette.muted }}>
-                  Every completed simulation appears here.
+                  Keep personal travel and rides you offered in one clean place.
                 </ThemedText>
               </View>
               <Pressable
                 onPress={() => setHistoryVisible(false)}
                 style={[styles.modalCloseButton, { backgroundColor: palette.cardSecondary, borderColor: palette.border }]}>
                 <MaterialIcons name="close" size={20} color={palette.text} />
+              </Pressable>
+            </View>
+
+            <View
+              style={[
+                styles.historyFilterRow,
+                { backgroundColor: palette.cardSecondary, borderColor: palette.border },
+              ]}>
+              <Pressable
+                accessibilityLabel="Personal trips"
+                onPress={() => setHistoryView('personal')}
+                style={[
+                  styles.historyFilterButton,
+                  historyView === 'personal' && {
+                    backgroundColor: palette.accent,
+                    borderColor: palette.accent,
+                  },
+                ]}>
+                <MaterialIcons
+                  name="person"
+                  size={20}
+                  color={historyView === 'personal' ? '#FFFFFF' : palette.text}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Rides offered"
+                onPress={() => setHistoryView('offered')}
+                style={[
+                  styles.historyFilterButton,
+                  historyView === 'offered' && {
+                    backgroundColor: palette.accent,
+                    borderColor: palette.accent,
+                  },
+                ]}>
+                <MaterialIcons
+                  name="drive-eta"
+                  size={20}
+                  color={historyView === 'offered' ? '#FFFFFF' : palette.text}
+                />
               </Pressable>
             </View>
 
@@ -2031,6 +2089,13 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
   },
+  historyTypeBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   tripTitle: {
     fontSize: 18,
     fontWeight: '700',
@@ -2203,6 +2268,23 @@ const styles = StyleSheet.create({
   modalList: {
     gap: 12,
     paddingBottom: 8,
+  },
+  historyFilterRow: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 6,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  historyFilterButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
   },
   messageCard: {
     borderRadius: 20,
