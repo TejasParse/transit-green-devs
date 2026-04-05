@@ -1,21 +1,33 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useIsFocused } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
 
 import { ThemedText } from '@/components/themed-text';
 import { useUserProfile } from '@/context/user-context';
-import { fetchLeaderboard } from '@/lib/api';
-import { formatCo2, formatDistance } from '@/lib/formatters';
-import { LeaderboardEntry } from '@/types/trips';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { fetchLeaderboard } from '@/lib/api';
+import { formatCo2, formatDistance, formatTripDate } from '@/lib/formatters';
+import { LeaderboardEntry, LeaderboardSnapshot } from '@/types/trips';
+
+const EMPTY_LEADERBOARD: LeaderboardSnapshot = {
+  summary: {
+    activeRiders: 0,
+    totalTrips: 0,
+    totalDistanceMeters: 0,
+    totalCo2Kg: 0,
+    totalCo2SavedKg: 0,
+  },
+  entries: [],
+  currentUser: null,
+};
 
 export default function LeaderboardScreen() {
   const colorScheme = useColorScheme();
   const isFocused = useIsFocused();
   const { userId, tripVersion } = useUserProfile();
-  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardSnapshot>(EMPTY_LEADERBOARD);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -52,9 +64,9 @@ export default function LeaderboardScreen() {
       setErrorMessage(null);
 
       try {
-        const nextEntries = await fetchLeaderboard();
+        const nextLeaderboard = await fetchLeaderboard(userId);
         if (isMounted) {
-          setEntries(nextEntries);
+          setLeaderboard(nextLeaderboard);
         }
       } catch (error) {
         if (isMounted) {
@@ -74,10 +86,50 @@ export default function LeaderboardScreen() {
     return () => {
       isMounted = false;
     };
-  }, [isFocused, tripVersion]);
+  }, [isFocused, tripVersion, userId]);
 
-  const totalSavedKg = entries.reduce((sum, entry) => sum + entry.totalCo2SavedKg, 0);
-  const totalTrips = entries.reduce((sum, entry) => sum + entry.totalTrips, 0);
+  const entries = leaderboard.entries;
+  const currentUser = leaderboard.currentUser;
+  const topThreeEntries = entries.slice(0, 3);
+
+  function renderEntryCard(entry: LeaderboardEntry) {
+    const isCurrentUser = entry.userId === userId;
+
+    return (
+      <View
+        key={entry.userId}
+        style={[
+          styles.entryCard,
+          {
+            backgroundColor: palette.card,
+            borderColor: isCurrentUser ? palette.accent : palette.border,
+          },
+        ]}>
+        <View style={styles.rankCircle}>
+          <ThemedText style={{ color: palette.text, fontWeight: '700' }}>#{entry.rank}</ThemedText>
+        </View>
+        <View style={{ flex: 1, gap: 4 }}>
+          <View style={styles.entryHeader}>
+            <ThemedText style={[styles.entryName, { color: palette.text }]}>{entry.displayName}</ThemedText>
+            {isCurrentUser ? (
+              <View style={[styles.youBadge, { backgroundColor: `${palette.accent}18` }]}>
+                <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>You</ThemedText>
+              </View>
+            ) : null}
+          </View>
+          <ThemedText style={{ color: palette.muted }}>
+            {entry.totalTrips} trips | {formatDistance(entry.totalDistanceMeters)}
+          </ThemedText>
+          <ThemedText style={{ color: palette.text }}>
+            Saved {formatCo2(entry.totalCo2SavedKg)} | emitted {formatCo2(entry.totalCo2Kg)}
+          </ThemedText>
+          {entry.lastTripAt ? (
+            <ThemedText style={{ color: palette.muted }}>Last trip {formatTripDate(entry.lastTripAt)}</ThemedText>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.background }]} edges={['top']}>
@@ -95,13 +147,28 @@ export default function LeaderboardScreen() {
           <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
             <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Saved together</ThemedText>
             <ThemedText style={{ color: palette.text, fontSize: 22, fontWeight: '700' }}>
-              {formatCo2(totalSavedKg)}
+              {formatCo2(leaderboard.summary.totalCo2SavedKg)}
             </ThemedText>
           </View>
           <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
             <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Trips logged</ThemedText>
             <ThemedText style={{ color: palette.text, fontSize: 22, fontWeight: '700' }}>
-              {totalTrips}
+              {leaderboard.summary.totalTrips}
+            </ThemedText>
+          </View>
+        </View>
+
+        <View style={styles.summaryRow}>
+          <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Riders active</ThemedText>
+            <ThemedText style={{ color: palette.text, fontSize: 22, fontWeight: '700' }}>
+              {leaderboard.summary.activeRiders}
+            </ThemedText>
+          </View>
+          <View style={[styles.summaryCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+            <ThemedText style={[styles.summaryLabel, { color: palette.muted }]}>Distance</ThemedText>
+            <ThemedText style={{ color: palette.text, fontSize: 22, fontWeight: '700' }}>
+              {formatDistance(leaderboard.summary.totalDistanceMeters)}
             </ThemedText>
           </View>
         </View>
@@ -124,41 +191,63 @@ export default function LeaderboardScreen() {
             </ThemedText>
           </View>
         ) : (
-          entries.map((entry, index) => {
-            const isCurrentUser = entry.userId === userId;
-
-            return (
+          <>
+            {currentUser ? (
               <View
-                key={entry.userId}
                 style={[
-                  styles.entryCard,
-                  {
-                    backgroundColor: palette.card,
-                    borderColor: isCurrentUser ? palette.accent : palette.border,
-                  },
+                  styles.currentUserCard,
+                  { backgroundColor: palette.card, borderColor: palette.accent },
                 ]}>
-                <View style={styles.rankCircle}>
-                  <ThemedText style={{ color: palette.text, fontWeight: '700' }}>{index + 1}</ThemedText>
-                </View>
-                <View style={{ flex: 1, gap: 4 }}>
-                  <View style={styles.entryHeader}>
-                    <ThemedText style={[styles.entryName, { color: palette.text }]}>{entry.displayName}</ThemedText>
-                    {isCurrentUser ? (
-                      <View style={[styles.youBadge, { backgroundColor: `${palette.accent}18` }]}>
-                        <ThemedText style={{ color: palette.accent, fontWeight: '700' }}>You</ThemedText>
-                      </View>
-                    ) : null}
-                  </View>
-                  <ThemedText style={{ color: palette.muted }}>
-                    {entry.totalTrips} trips · {formatDistance(entry.totalDistanceMeters)}
+                <ThemedText style={[styles.summaryLabel, { color: palette.accent }]}>Your standing</ThemedText>
+                <ThemedText style={{ color: palette.text, fontSize: 24, fontWeight: '700' }}>
+                  #{currentUser.rank} in community
+                </ThemedText>
+                <ThemedText style={{ color: palette.muted }}>
+                  {formatCo2(currentUser.totalCo2SavedKg)} saved across {currentUser.totalTrips} trips.
+                </ThemedText>
+                {currentUser.rank === 1 ? (
+                  <ThemedText style={{ color: palette.accent }}>
+                    You are currently leading the leaderboard.
                   </ThemedText>
+                ) : currentUser.co2GapToNextRankKg != null ? (
                   <ThemedText style={{ color: palette.text }}>
-                    Saved {formatCo2(entry.totalCo2SavedKg)} · emitted {formatCo2(entry.totalCo2Kg)}
+                    {formatCo2(currentUser.co2GapToNextRankKg)} more to pass rank #{currentUser.rank - 1}.
+                  </ThemedText>
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={[styles.podiumCard, { backgroundColor: palette.card, borderColor: palette.border }]}>
+              <ThemedText type="subtitle" style={{ color: palette.text }}>
+                Top riders
+              </ThemedText>
+              {topThreeEntries.map((entry) => (
+                <View key={entry.userId} style={styles.podiumRow}>
+                  <MaterialIcons
+                    name={entry.rank === 1 ? 'emoji-events' : 'workspace-premium'}
+                    size={20}
+                    color={entry.rank === 1 ? palette.accentAlt : palette.accent}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
+                      #{entry.rank} {entry.displayName}
+                    </ThemedText>
+                    <ThemedText style={{ color: palette.muted }}>
+                      {entry.totalTrips} trips | {formatDistance(entry.totalDistanceMeters)}
+                    </ThemedText>
+                  </View>
+                  <ThemedText style={{ color: palette.text, fontWeight: '700' }}>
+                    {formatCo2(entry.totalCo2SavedKg)}
                   </ThemedText>
                 </View>
-              </View>
-            );
-          })
+              ))}
+            </View>
+
+            <ThemedText type="subtitle" style={{ color: palette.text }}>
+              Full ranking
+            </ThemedText>
+            {entries.map((entry) => renderEntryCard(entry))}
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -211,6 +300,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  currentUserCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+    gap: 6,
+  },
+  podiumCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+    gap: 12,
+  },
+  podiumRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   entryCard: {
     borderRadius: 24,
     borderWidth: 1,
@@ -219,7 +325,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   rankCircle: {
-    width: 38,
+    width: 46,
     height: 38,
     borderRadius: 19,
     alignItems: 'center',
@@ -241,3 +347,4 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
 });
+

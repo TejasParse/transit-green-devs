@@ -83,11 +83,27 @@ export type TripRecord = TripPayload & {
 };
 
 export type LeaderboardEntry = {
+  rank: number;
   userId: number;
   displayName: string;
   totalTrips: number;
   totalDistanceMeters: number;
   totalCo2Kg: number;
   totalCo2SavedKg: number;
+  co2GapToNextRankKg: number | null;
   lastTripAt: string | null;
+};
+
+export type LeaderboardSummary = {
+  activeRiders: number;
+  totalTrips: number;
+  totalDistanceMeters: number;
+  totalCo2Kg: number;
+  totalCo2SavedKg: number;
+};
+
+export type LeaderboardSnapshot = {
+  summary: LeaderboardSummary;
+  entries: LeaderboardEntry[];
+  currentUser: LeaderboardEntry | null;
 };

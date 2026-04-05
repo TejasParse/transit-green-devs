@@ -5,6 +5,14 @@ const {
 } = require('../db/trip-queries');
 const { readPositiveInteger, validateTripPayload } = require('../validators/trip-validator');
 
+function readOptionalPositiveInteger(value, fieldName) {
+  if (value == null || value === '') {
+    return null;
+  }
+
+  return readPositiveInteger(value, fieldName);
+}
+
 async function getTrips(req, res, next) {
   try {
     const userId = readPositiveInteger(req.query.userId, 'userId');
@@ -15,9 +23,12 @@ async function getTrips(req, res, next) {
   }
 }
 
-async function getLeaderboard(_req, res, next) {
+async function getLeaderboard(req, res, next) {
   try {
-    const leaderboard = await getLeaderboardEntries();
+    const userId = readOptionalPositiveInteger(req.query.userId, 'userId');
+    const requestedLimit = readOptionalPositiveInteger(req.query.limit, 'limit');
+    const limit = requestedLimit == null ? 25 : Math.min(requestedLimit, 100);
+    const leaderboard = await getLeaderboardEntries({ userId, limit });
     res.json(leaderboard);
   } catch (error) {
     next(error);
