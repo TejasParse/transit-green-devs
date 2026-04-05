@@ -1,3 +1,4 @@
+const { listMyCarpools } = require('./carpool-queries');
 const { pool } = require('./pool');
 const {
   formatUnlockRequirement,
@@ -22,6 +23,7 @@ function mapRecentTripPreviewRow(row) {
     durationSeconds: row.duration_seconds,
     co2Kg: Number(row.co2_kg),
     co2SavedKg: Number(row.co2_saved_kg),
+    participantRole: row.participant_role ?? null,
     completedAt: row.completed_at,
     createdAt: row.created_at,
   };
@@ -46,6 +48,8 @@ async function getProfileSummary(userId, db = pool) {
         profiles.id AS user_id,
         profiles.user_name AS display_name,
         profiles.total_points::INTEGER AS total_points_earned,
+        profiles.carpool_cancellation_count::INTEGER AS carpool_cancellation_count,
+        profiles.carpool_blocked,
         COALESCE(trip_stats.total_trips, 0)::INTEGER AS total_trips,
         COALESCE(trip_stats.total_distance_meters, 0)::INTEGER AS total_distance_meters,
         COALESCE(trip_stats.total_co2_kg, 0)::FLOAT8 AS total_co2_kg,
@@ -55,14 +59,49 @@ async function getProfileSummary(userId, db = pool) {
       FROM profiles
       LEFT JOIN (
         SELECT
-          user_id,
-          COUNT(*)::INTEGER AS total_trips,
-          COALESCE(SUM(distance_meters), 0)::INTEGER AS total_distance_meters,
-          COALESCE(SUM(co2_kg), 0)::FLOAT8 AS total_co2_kg,
-          COALESCE(SUM(co2_saved_kg), 0)::FLOAT8 AS total_co2_saved_kg
-        FROM trips
-        WHERE status = 'ended'
-        GROUP BY user_id
+          trip_users.user_id,
+          COUNT(*) FILTER (
+            WHERE trips.status IN ('completed', 'ended')
+              AND trip_users.left_at IS NULL
+          )::INTEGER AS total_trips,
+          COALESCE(SUM(CASE
+            WHEN trips.status IN ('completed', 'ended')
+              AND trip_users.left_at IS NULL
+            THEN trips.distance_meters
+            ELSE 0
+          END), 0)::INTEGER AS total_distance_meters,
+          COALESCE(SUM(CASE
+            WHEN trips.status IN ('completed', 'ended')
+              AND trip_users.left_at IS NULL
+              AND trips.route_type = 'carpool'
+              AND participant_counts.participant_count > 0
+            THEN trips.co2_kg / participant_counts.participant_count
+            WHEN trips.status IN ('completed', 'ended')
+              AND trip_users.left_at IS NULL
+            THEN trips.co2_kg
+            ELSE 0
+          END), 0)::FLOAT8 AS total_co2_kg,
+          COALESCE(SUM(CASE
+            WHEN trips.status IN ('completed', 'ended')
+              AND trip_users.left_at IS NULL
+              AND trips.route_type = 'carpool'
+              AND participant_counts.participant_count > 0
+            THEN trips.co2_saved_kg / participant_counts.participant_count
+            WHEN trips.status IN ('completed', 'ended')
+              AND trip_users.left_at IS NULL
+            THEN trips.co2_saved_kg
+            ELSE 0
+          END), 0)::FLOAT8 AS total_co2_saved_kg
+        FROM trip_users
+        INNER JOIN trips ON trips.id = trip_users.trip_id
+        LEFT JOIN (
+          SELECT
+            trip_id,
+            COUNT(*) FILTER (WHERE left_at IS NULL)::INTEGER AS participant_count
+          FROM trip_users
+          GROUP BY trip_id
+        ) AS participant_counts ON participant_counts.trip_id = trips.id
+        GROUP BY trip_users.user_id
       ) AS trip_stats ON trip_stats.user_id = profiles.id
       LEFT JOIN (
         SELECT
@@ -96,31 +135,44 @@ async function getProfileSummary(userId, db = pool) {
     totalCo2Kg: Number(row.total_co2_kg),
     totalCo2SavedKg: Number(row.total_co2_saved_kg),
     totalTrees: row.total_trees,
+    carpoolCancellationCount: row.carpool_cancellation_count,
+    carpoolBlocked: row.carpool_blocked,
   };
 }
 
 async function getRecentTrips(userId, db = pool, limit = 4) {
   const result = await db.query(
     `
-      SELECT
-        trips.id,
-        trips.user_id,
-        trips.route_type,
-        trips.route_title,
-        trips.origin_label,
-        trips.destination_label,
-        trips.distance_meters,
-        trips.duration_seconds,
-        trips.co2_kg,
-        trips.co2_saved_kg,
-        trips.completed_at,
-        trips.created_at,
-        profiles.user_name AS display_name
-      FROM trips
-      INNER JOIN profiles ON profiles.id = trips.user_id
-      WHERE trips.user_id = $1
-        AND trips.status = 'ended'
-      ORDER BY trips.completed_at DESC, trips.id DESC
+      SELECT *
+      FROM (
+        SELECT DISTINCT ON (trips.id)
+          trips.id,
+          trips.user_id,
+          trips.route_type,
+          trips.route_title,
+          trips.origin_label,
+          trips.destination_label,
+          trips.distance_meters,
+          trips.duration_seconds,
+          trips.co2_kg,
+          trips.co2_saved_kg,
+          trips.completed_at,
+          trips.created_at,
+          trip_users.participant_role,
+          profiles.user_name AS display_name
+        FROM trips
+        INNER JOIN profiles ON profiles.id = trips.user_id
+        LEFT JOIN trip_users
+          ON trip_users.trip_id = trips.id
+         AND trip_users.user_id = $1
+        WHERE trips.status IN ('completed', 'ended')
+          AND (
+            trips.user_id = $1
+            OR trip_users.user_id = $1
+          )
+        ORDER BY trips.id, trip_users.joined_at DESC NULLS LAST
+      ) AS recent_trips
+      ORDER BY completed_at DESC, id DESC
       LIMIT $2
     `,
     [userId, limit]
@@ -177,7 +229,54 @@ function buildTreeCatalog(summary, plantedTrees) {
   });
 }
 
-function buildAchievements(summary) {
+function buildCarpoolSummary(carpools, summary) {
+  const activeTrips = carpools.filter((trip) =>
+    ['draft', 'scheduled', 'confirmed', 'active'].includes(trip.status)
+  );
+  const pastTrips = carpools.filter((trip) =>
+    ['completed', 'ended', 'cancelled', 'expired'].includes(trip.status)
+  );
+  const completedTrips = carpools.filter((trip) => ['completed', 'ended'].includes(trip.status));
+  const driverTrips = carpools.filter((trip) => trip.currentUserRole === 'driver');
+  const riderTrips = carpools.filter((trip) => trip.currentUserRole === 'rider');
+  const pendingApprovals = driverTrips.reduce(
+    (total, trip) => total + trip.requests.filter((request) => request.status === 'pending').length,
+    0
+  );
+  const outgoingPendingRequests = riderTrips.filter(
+    (trip) => trip.currentUserRequest?.status === 'pending'
+  ).length;
+  const totalRidersHelped = completedTrips.reduce((total, trip) => {
+    if (trip.currentUserRole !== 'driver') {
+      return total;
+    }
+
+    return total + trip.participants.filter((participant) => participant.role === 'rider').length;
+  }, 0);
+  const totalSharedCo2SavedKg = completedTrips.reduce((total, trip) => total + trip.co2SavedKg, 0);
+  const highestImpactMultiplier = completedTrips.reduce(
+    (best, trip) => Math.max(best, trip.carpoolImpactMultiplier ?? 1),
+    1
+  );
+
+  return {
+    totalCarpoolTrips: carpools.length,
+    activeTrips: activeTrips.length,
+    pastTrips: pastTrips.length,
+    completedTrips: completedTrips.length,
+    driverTrips: driverTrips.length,
+    riderTrips: riderTrips.length,
+    totalRidersHelped,
+    totalSharedCo2SavedKg: Number(totalSharedCo2SavedKg.toFixed(3)),
+    highestImpactMultiplier,
+    pendingApprovals,
+    outgoingPendingRequests,
+    cancellationCount: summary.carpoolCancellationCount,
+    isBlocked: summary.carpoolBlocked,
+  };
+}
+
+function buildAchievements(summary, carpoolSummary) {
   const achievements = [
     {
       id: 'first-tree',
@@ -196,20 +295,36 @@ function buildAchievements(summary) {
       unit: 'trees',
     },
     {
-      id: 'ten-trees',
-      title: '10 Trees Planted',
-      description: 'Turn your forest into a thriving canopy.',
-      currentValue: Math.min(summary.totalTrees, 10),
-      targetValue: 10,
-      unit: 'trees',
-    },
-    {
       id: 'ten-kg-saved',
       title: '10 kg CO2 Saved',
       description: 'Avoid 10 kilograms of CO2 through lower-carbon travel.',
       currentValue: Math.min(summary.totalCo2SavedKg, 10),
       targetValue: 10,
       unit: 'kg CO2',
+    },
+    {
+      id: 'first-carpool-ride',
+      title: 'First Carpool Ride',
+      description: 'Complete your first carpool trip as a driver or rider.',
+      currentValue: Math.min(carpoolSummary.completedTrips, 1),
+      targetValue: 1,
+      unit: 'rides',
+    },
+    {
+      id: 'shared-five-rides',
+      title: 'Shared 5 Rides',
+      description: 'Take part in five completed carpools.',
+      currentValue: Math.min(carpoolSummary.completedTrips, 5),
+      targetValue: 5,
+      unit: 'rides',
+    },
+    {
+      id: 'eco-driver',
+      title: 'Eco Driver',
+      description: 'Help five riders reach their destination in shared carpools.',
+      currentValue: Math.min(carpoolSummary.totalRidersHelped, 5),
+      targetValue: 5,
+      unit: 'riders',
     },
   ];
 
@@ -220,7 +335,17 @@ function buildAchievements(summary) {
   }));
 }
 
-function buildNarrative(summary) {
+function buildNarrative(summary, carpoolSummary) {
+  if (carpoolSummary.completedTrips > 0) {
+    return `Your forest reflects ${summary.totalCo2SavedKg.toFixed(
+      2
+    )} kg of avoided CO2, including ${carpoolSummary.totalSharedCo2SavedKg.toFixed(
+      2
+    )} kg saved through carpools with up to ${carpoolSummary.highestImpactMultiplier.toFixed(
+      1
+    )}x shared impact.`;
+  }
+
   if (summary.totalTrees === 0) {
     return 'Each tree you plant turns your transit choices into a visible record of climate-positive impact.';
   }
@@ -229,13 +354,15 @@ function buildNarrative(summary) {
 }
 
 async function getUserDashboard(userId) {
-  const [summary, plantedTrees, recentTrips] = await Promise.all([
+  const [summary, plantedTrees, recentTrips, myCarpools] = await Promise.all([
     getProfileSummary(userId),
     getForestTrees(userId),
     getRecentTrips(userId),
+    listMyCarpools(userId),
   ]);
 
   const treeCatalog = buildTreeCatalog(summary, plantedTrees);
+  const carpoolSummary = buildCarpoolSummary(myCarpools, summary);
 
   return {
     summary,
@@ -246,9 +373,13 @@ async function getUserDashboard(userId) {
       totalTrees: plantedTrees.length,
       treeCatalog,
     },
-    achievements: buildAchievements(summary),
-    narrative: buildNarrative(summary),
+    achievements: buildAchievements(summary, carpoolSummary),
+    narrative: buildNarrative(summary, carpoolSummary),
     recentTrips,
+    carpools: {
+      summary: carpoolSummary,
+      trips: myCarpools,
+    },
   };
 }
 
@@ -291,7 +422,7 @@ async function plantForestTree({ userId, treeTypeId, gridX, gridY }) {
           COALESCE(SUM(co2_saved_kg), 0)::FLOAT8 AS total_co2_saved_kg
         FROM trips
         WHERE user_id = $1
-          AND status = 'ended'
+          AND status IN ('completed', 'ended')
       `,
       [userId]
     );

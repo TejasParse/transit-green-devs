@@ -1,7 +1,18 @@
 import Constants from 'expo-constants';
 
 import { PlantTreePayload, UserDashboard } from '@/types/dashboard';
-import { LeaderboardSnapshot, TripPayload, TripRecord } from '@/types/trips';
+import {
+  CarpoolRequestRecord,
+  CarpoolSearchResponse,
+  CarpoolTripRecord,
+  CreateCarpoolPayload,
+  CreateCarpoolRequestPayload,
+  LeaderboardSnapshot,
+  TripPayload,
+  TripRecord,
+  UpdateCarpoolPayload,
+  UpdateCarpoolLiveStatusPayload,
+} from '@/types/trips';
 
 type ExpoConstantsShape = {
   expoConfig?: {
@@ -90,4 +101,104 @@ export function createTrip(payload: TripPayload) {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function searchCarpools(params: {
+  userId: number;
+  originLat: number;
+  originLng: number;
+  destinationLat: number;
+  destinationLng: number;
+  desiredDepartureTime: string;
+  windowMinutes?: number;
+  routeDistanceMeters: number;
+}) {
+  const searchParams = new URLSearchParams({
+    userId: String(params.userId),
+    originLat: String(params.originLat),
+    originLng: String(params.originLng),
+    destinationLat: String(params.destinationLat),
+    destinationLng: String(params.destinationLng),
+    desiredDepartureTime: params.desiredDepartureTime,
+    routeDistanceMeters: String(params.routeDistanceMeters),
+  });
+
+  if (params.windowMinutes != null) {
+    searchParams.set('windowMinutes', String(params.windowMinutes));
+  }
+
+  return request<CarpoolSearchResponse>(`/api/carpools/search?${searchParams.toString()}`);
+}
+
+export function createCarpool(payload: CreateCarpoolPayload) {
+  return request<CarpoolTripRecord>('/api/carpools', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCarpool(payload: UpdateCarpoolPayload) {
+  return request<CarpoolTripRecord>(`/api/carpools/${payload.tripId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchMyCarpools(userId: number) {
+  const searchParams = new URLSearchParams({ userId: String(userId) });
+  return request<CarpoolTripRecord[]>(`/api/carpools/my?${searchParams.toString()}`);
+}
+
+export function requestCarpoolSeat(tripId: number, payload: CreateCarpoolRequestPayload) {
+  return request<CarpoolRequestRecord>(`/api/carpools/${tripId}/requests`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+function postCarpoolAction<T>(path: string, userId: number) {
+  return request<T>(path, {
+    method: 'POST',
+    body: JSON.stringify({ userId }),
+  });
+}
+
+export function acceptCarpoolRequest(tripId: number, requestId: number, userId: number) {
+  return postCarpoolAction<CarpoolTripRecord>(
+    `/api/carpools/${tripId}/requests/${requestId}/accept`,
+    userId
+  );
+}
+
+export function rejectCarpoolRequest(tripId: number, requestId: number, userId: number) {
+  return postCarpoolAction<CarpoolTripRecord>(
+    `/api/carpools/${tripId}/requests/${requestId}/reject`,
+    userId
+  );
+}
+
+export function cancelCarpoolRequest(tripId: number, requestId: number, userId: number) {
+  return postCarpoolAction<CarpoolTripRecord>(
+    `/api/carpools/${tripId}/requests/${requestId}/cancel`,
+    userId
+  );
+}
+
+export function startCarpool(tripId: number, userId: number) {
+  return postCarpoolAction<CarpoolTripRecord>(`/api/carpools/${tripId}/start`, userId);
+}
+
+export function updateCarpoolLiveStatus(tripId: number, payload: UpdateCarpoolLiveStatusPayload) {
+  return request<CarpoolTripRecord>(`/api/carpools/${tripId}/live-status`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function completeCarpool(tripId: number, userId: number) {
+  return postCarpoolAction<CarpoolTripRecord>(`/api/carpools/${tripId}/complete`, userId);
+}
+
+export function cancelCarpool(tripId: number, userId: number) {
+  return postCarpoolAction<CarpoolTripRecord>(`/api/carpools/${tripId}/cancel`, userId);
 }

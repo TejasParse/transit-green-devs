@@ -10,6 +10,7 @@
     "dev": "node index.js",
     "start": "node index.js",
     "db:reset": "node db/seed.js",
+    "verify:carpool": "bash scripts/verify-carpool-flow.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

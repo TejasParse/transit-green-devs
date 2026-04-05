@@ -1,4 +1,4 @@
-import { TripRecord } from '@/types/trips';
+import { CarpoolTripRecord, TripRecord } from '@/types/trips';
 
 export type TreeUnlockMetric = 'points' | 'co2SavedKg';
 
@@ -38,6 +38,8 @@ export type DashboardSummary = {
   totalCo2Kg: number;
   totalCo2SavedKg: number;
   totalTrees: number;
+  carpoolCancellationCount: number;
+  carpoolBlocked: boolean;
 };
 
 export type ForestAchievement = {
@@ -63,8 +65,25 @@ export type RecentTrip = {
   durationSeconds: number;
   co2Kg: number;
   co2SavedKg: number;
+  participantRole: TripRecord['participantRole'];
   completedAt: string;
   createdAt: string;
+};
+
+export type CarpoolDashboardSummary = {
+  totalCarpoolTrips: number;
+  activeTrips: number;
+  pastTrips: number;
+  completedTrips: number;
+  driverTrips: number;
+  riderTrips: number;
+  totalRidersHelped: number;
+  totalSharedCo2SavedKg: number;
+  highestImpactMultiplier: number;
+  pendingApprovals: number;
+  outgoingPendingRequests: number;
+  cancellationCount: number;
+  isBlocked: boolean;
 };
 
 export type UserDashboard = {
@@ -79,6 +98,10 @@ export type UserDashboard = {
   achievements: ForestAchievement[];
   narrative: string;
   recentTrips: RecentTrip[];
+  carpools: {
+    summary: CarpoolDashboardSummary;
+    trips: CarpoolTripRecord[];
+  };
 };
 
 export type PlantTreePayload = {
