@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ProfileDropdown } from '@/components/profile-dropdown';
 import { ThemedText } from '@/components/themed-text';
 import { useUserProfile } from '@/context/user-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -141,6 +142,16 @@ export default function LeaderboardScreen() {
           <ThemedText style={{ color: palette.muted }}>
             Riders are ranked by how much CO2 they have avoided compared with driving solo.
           </ThemedText>
+          <ProfileDropdown
+            palette={{
+              card: palette.card,
+              cardSecondary: palette.card,
+              border: palette.border,
+              text: palette.text,
+              muted: palette.muted,
+              accent: palette.accent,
+            }}
+          />
         </View>
 
         <View style={styles.summaryRow}>
@@ -347,4 +358,3 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
 });
-

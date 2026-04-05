@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 
+import { ProfileDropdown } from '@/components/profile-dropdown';
 import { ThemedText } from '@/components/themed-text';
 import { useUserProfile } from '@/context/user-context';
 import { fetchUserDashboard, fetchUserTrips, plantForestTree } from '@/lib/api';
@@ -465,6 +466,17 @@ export default function ProfileScreen() {
             <ThemedText style={[styles.historyButtonText, { color: palette.text }]}>History</ThemedText>
           </Pressable>
         </View>
+
+        <ProfileDropdown
+          palette={{
+            card: palette.card,
+            cardSecondary: palette.cardSecondary,
+            border: palette.border,
+            text: palette.text,
+            muted: palette.muted,
+            accent: palette.accent,
+          }}
+        />
 
         {dashboardError ? (
           <View style={[styles.bannerCard, { backgroundColor: palette.errorSurface, borderColor: palette.border }]}>

@@ -117,6 +117,11 @@ const demoTrips = [
     co2Kg: 1.021,
     co2SavedKg: 0.148,
     availableSeats: 1,
+    carpoolEnabled: true,
+    maxDetourType: 'distance',
+    maxDetourValue: 1.5,
+    pricePerSeatMile: 1.25,
+    simulationSpeedMultiplier: 1,
     status: 'ended',
     startedAt: new Date(now - 1000 * 60 * 150).toISOString(),
     completedAt: new Date(now - 1000 * 60 * 129).toISOString(),
@@ -169,6 +174,11 @@ const demoTrips = [
     co2Kg: 1.184,
     co2SavedKg: 0.163,
     availableSeats: 2,
+    carpoolEnabled: true,
+    maxDetourType: 'time',
+    maxDetourValue: 10,
+    pricePerSeatMile: 1.1,
+    simulationSpeedMultiplier: 1.5,
     status: 'scheduled',
     startedAt: new Date(now + 1000 * 60 * 60).toISOString(),
     completedAt: new Date(now + 1000 * 60 * 84).toISOString(),
@@ -218,9 +228,62 @@ const demoTripUsers = [
   { tripKey: 'transit-active', driverKey: 'transit-fan', riderKey: 'transit-fan' },
   { tripKey: 'drive-scheduled', driverKey: 'campus-rider', riderKey: 'campus-rider' },
   { tripKey: 'drive-scheduled', driverKey: 'campus-rider', riderKey: 'transit-fan' },
-  { tripKey: 'drive-scheduled', driverKey: 'campus-rider', riderKey: 'community-driver' },
   { tripKey: 'drive-cancelled', driverKey: 'community-driver', riderKey: 'community-driver' },
   { tripKey: 'drive-cancelled', driverKey: 'community-driver', riderKey: 'bike-commuter' },
+];
+
+const demoCarpoolRequests = [
+  {
+    tripKey: 'drive-ended',
+    hostKey: 'campus-rider',
+    riderKey: 'bike-commuter',
+    status: 'accepted',
+    pickupLabel: 'Sky Harbor Terminal 4',
+    dropoffLabel: 'ASU Tempe North Entrance',
+    pickupPoint: { latitude: 33.4324, longitude: -111.9794 },
+    dropoffPoint: { latitude: 33.4239, longitude: -111.9415 },
+    pickupDistanceMeters: 540,
+    dropoffDistanceMeters: 180,
+    destinationGapMeters: 160,
+    estimatedDetourMinutes: 4.2,
+    projectedPickupIndex: 1,
+    projectedDropoffIndex: 2,
+    quotedPrice: 6.45,
+  },
+  {
+    tripKey: 'drive-scheduled',
+    hostKey: 'campus-rider',
+    riderKey: 'transit-fan',
+    status: 'accepted',
+    pickupLabel: 'Mill Avenue Bridge',
+    dropoffLabel: 'Old Town Scottsdale',
+    pickupPoint: { latitude: 33.4326, longitude: -111.9398 },
+    dropoffPoint: { latitude: 33.4988, longitude: -111.9276 },
+    pickupDistanceMeters: 410,
+    dropoffDistanceMeters: 270,
+    destinationGapMeters: 340,
+    estimatedDetourMinutes: 6.1,
+    projectedPickupIndex: 1,
+    projectedDropoffIndex: 2,
+    quotedPrice: 7.9,
+  },
+  {
+    tripKey: 'drive-scheduled',
+    hostKey: 'campus-rider',
+    riderKey: 'community-driver',
+    status: 'pending',
+    pickupLabel: 'Tempe Marketplace',
+    dropoffLabel: 'Scottsdale Fashion Square',
+    pickupPoint: { latitude: 33.4301, longitude: -111.9012 },
+    dropoffPoint: { latitude: 33.5015, longitude: -111.9271 },
+    pickupDistanceMeters: 760,
+    dropoffDistanceMeters: 350,
+    destinationGapMeters: 190,
+    estimatedDetourMinutes: 8.4,
+    projectedPickupIndex: 1,
+    projectedDropoffIndex: 2,
+    quotedPrice: 8.72,
+  },
 ];
 
 function parseCsvLine(line) {
@@ -398,6 +461,11 @@ async function seedTrips(profileIdMap) {
       co2Kg: trip.co2Kg,
       co2SavedKg: trip.co2SavedKg,
       availableSeats: trip.availableSeats,
+      carpoolEnabled: trip.carpoolEnabled,
+      maxDetourType: trip.maxDetourType,
+      maxDetourValue: trip.maxDetourValue,
+      pricePerSeatMile: trip.pricePerSeatMile,
+      simulationSpeedMultiplier: trip.simulationSpeedMultiplier,
       status: trip.status,
       startedAt: trip.startedAt,
       completedAt: trip.completedAt,
@@ -429,6 +497,57 @@ async function seedTripUsers(profileIdMap, tripIdMap) {
   return demoTripUsers.length;
 }
 
+async function seedCarpoolRequests(profileIdMap, tripIdMap) {
+  for (const request of demoCarpoolRequests) {
+    await pool.query(
+      `
+        INSERT INTO carpool_requests (
+          trip_id,
+          host_id,
+          rider_id,
+          status,
+          pickup_label,
+          dropoff_label,
+          pickup_point,
+          dropoff_point,
+          pickup_distance_meters,
+          dropoff_distance_meters,
+          destination_gap_meters,
+          estimated_detour_minutes,
+          projected_pickup_index,
+          projected_dropoff_index,
+          quoted_price,
+          responded_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb,
+          $9, $10, $11, $12, $13, $14, $15,
+          CASE WHEN $4 = 'pending' THEN NULL ELSE NOW() END
+        )
+      `,
+      [
+        tripIdMap.get(request.tripKey),
+        profileIdMap.get(request.hostKey),
+        profileIdMap.get(request.riderKey),
+        request.status,
+        request.pickupLabel,
+        request.dropoffLabel,
+        JSON.stringify(request.pickupPoint),
+        JSON.stringify(request.dropoffPoint),
+        request.pickupDistanceMeters,
+        request.dropoffDistanceMeters,
+        request.destinationGapMeters,
+        request.estimatedDetourMinutes,
+        request.projectedPickupIndex,
+        request.projectedDropoffIndex,
+        request.quotedPrice,
+      ]
+    );
+  }
+
+  return demoCarpoolRequests.length;
+}
+
 async function run() {
   const keepEmpty = process.argv.includes('--empty');
 
@@ -445,9 +564,10 @@ async function run() {
   const profileIdMap = await seedProfiles();
   const tripIdMap = await seedTrips(profileIdMap);
   const tripUserCount = await seedTripUsers(profileIdMap, tripIdMap);
+  const carpoolRequestCount = await seedCarpoolRequests(profileIdMap, tripIdMap);
 
   console.log(
-    `Created a fresh schema and inserted ${carCount} cars, ${profileIdMap.size} profiles, ${tripIdMap.size} trips, and ${tripUserCount} trip-user records.`
+    `Created a fresh schema and inserted ${carCount} cars, ${profileIdMap.size} profiles, ${tripIdMap.size} trips, ${tripUserCount} trip-user records, and ${carpoolRequestCount} carpool requests.`
   );
 }
 

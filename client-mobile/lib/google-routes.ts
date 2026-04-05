@@ -67,6 +67,14 @@ type BuildRoutePlanParams = {
   destinationLabel: string;
 };
 
+type DriveRouteStop = {
+  label: string;
+  point: {
+    latitude: number;
+    longitude: number;
+  };
+};
+
 type ModeFetchResult = {
   kind: RouteKind;
   routes: GoogleRoute[];
@@ -590,5 +598,95 @@ export async function buildRoutePlan({
     generatedAt: new Date().toISOString(),
     notices,
     options: sortedOptions,
+  };
+}
+
+export async function buildDriveRoutePreview({
+  origin,
+  destination,
+  originLabel,
+  destinationLabel,
+}: BuildRoutePlanParams) {
+  const { routes } = await fetchRoutesForMode('drive', origin, destination);
+
+  if (routes.length === 0) {
+    throw new Error('Google Maps did not return any driving routes for this trip.');
+  }
+
+  const preferredDriveRoute = choosePreferredRoute('drive', routes);
+
+  if (!preferredDriveRoute) {
+    throw new Error('Google Maps returned driving data, but no usable driving route could be derived.');
+  }
+
+  const driveReferenceCo2Kg = estimateDriveCo2Kg(preferredDriveRoute);
+  const alternativeDriveRoute = routes.find((route) => route !== preferredDriveRoute) ?? null;
+  const alternativeDriveCo2Kg = alternativeDriveRoute
+    ? estimateDriveCo2Kg(alternativeDriveRoute)
+    : null;
+  const option = buildRouteOption(
+    'drive',
+    preferredDriveRoute,
+    driveReferenceCo2Kg,
+    alternativeDriveCo2Kg,
+    Boolean(preferredDriveRoute.routeLabels?.includes('FUEL_EFFICIENT'))
+  );
+
+  return {
+    originLabel,
+    destinationLabel,
+    origin: option.start,
+    destination: option.end,
+    generatedAt: new Date().toISOString(),
+    option,
+  };
+}
+
+export async function buildDriveRouteTimeline(stops: DriveRouteStop[]) {
+  if (!Array.isArray(stops) || stops.length < 2) {
+    throw new Error('At least two stops are required to build a carpool timeline.');
+  }
+
+  const pathPoints: Array<{ latitude: number; longitude: number }> = [];
+  const stopPathIndices: number[] = [0];
+  let totalDistanceMeters = 0;
+  let totalDurationSeconds = 0;
+
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    const originStop = stops[index];
+    const destinationStop = stops[index + 1];
+    const preview = await buildDriveRoutePreview({
+      origin: {
+        type: 'coordinates',
+        coordinates: originStop.point,
+      },
+      destination: {
+        type: 'coordinates',
+        coordinates: destinationStop.point,
+      },
+      originLabel: originStop.label,
+      destinationLabel: destinationStop.label,
+    });
+    const legPoints =
+      preview.option.polyline.length > 0
+        ? preview.option.polyline
+        : [preview.origin, preview.destination];
+
+    if (pathPoints.length === 0) {
+      pathPoints.push(...legPoints);
+    } else {
+      pathPoints.push(...legPoints.slice(1));
+    }
+
+    stopPathIndices.push(Math.max(pathPoints.length - 1, 0));
+    totalDistanceMeters += preview.option.distanceMeters;
+    totalDurationSeconds += preview.option.durationSeconds;
+  }
+
+  return {
+    pathPoints,
+    stopPathIndices,
+    distanceMeters: totalDistanceMeters,
+    durationSeconds: totalDurationSeconds,
   };
 }

@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useIsFocused } from '@react-navigation/native';
 import { type ComponentProps, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,14 +14,17 @@ import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 
+import { ProfileDropdown } from '@/components/profile-dropdown';
 import { ThemedText } from '@/components/themed-text';
-import { createTrip } from '@/lib/api';
-import { formatCo2, formatDistance, formatDuration } from '@/lib/formatters';
+import { createTrip, requestCarpoolSeat, searchCarpools } from '@/lib/api';
+import { formatCo2, formatDistance, formatDuration, formatTripDate } from '@/lib/formatters';
 import { createAutocompleteSessionToken, fetchPlaceSuggestions } from '@/lib/google-places';
 import { buildRoutePlan } from '@/lib/google-routes';
 import { useUserProfile } from '@/context/user-context';
 import {
   AddressSuggestion,
+  CarpoolMatch,
+  CarpoolRiderInput,
   RouteOption,
   RoutePlan,
   TripPayload,
@@ -40,6 +44,8 @@ const MAX_LATITUDE_DELTA = 0.6;
 const MIN_LONGITUDE_DELTA = 0.003;
 const MAX_LONGITUDE_DELTA = 0.6;
 const ZOOM_FACTOR = 0.5;
+const DEFAULT_SIMULATION_DURATION_SECONDS = 45;
+const CARPOOL_REFRESH_INTERVAL_MS = 4000;
 
 function buildRegion(points: { latitude: number; longitude: number }[]): Region {
   if (points.length === 0) {
@@ -85,6 +91,22 @@ function getRouteIcon(kind: RouteOption['kind']): ComponentProps<typeof Material
     case 'drive':
       return 'directions-car';
   }
+}
+
+function getTransportTabLabel(kind: RouteOption['kind'] | 'carpool') {
+  if (kind === 'carpool') {
+    return 'Carpool';
+  }
+
+  return getRouteTabLabel(kind);
+}
+
+function getTransportTabIcon(kind: RouteOption['kind'] | 'carpool'): ComponentProps<typeof MaterialIcons>['name'] {
+  if (kind === 'carpool') {
+    return 'groups';
+  }
+
+  return getRouteIcon(kind);
 }
 
 function getRouteModeLabel(kind: RouteOption['kind']) {
@@ -173,7 +195,13 @@ function isPlaceIdNotFoundError(error: unknown) {
   return /NOT_FOUND:\s*Place ID/i.test(error.message) && /not found/i.test(error.message);
 }
 
+function isVisibleCarpoolMatch(match: CarpoolMatch) {
+  return match.status === 'scheduled' || Boolean(match.existingRequestStatus);
+}
+
+
 export default function MapScreen() {
+  const isFocused = useIsFocused();
   const colorScheme = useColorScheme();
   const palette =
     colorScheme === 'dark'
@@ -233,6 +261,12 @@ export default function MapScreen() {
   );
   const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [selectedMode, setSelectedMode] = useState<RouteOption['kind'] | 'carpool' | null>(null);
+  const [carpoolMatches, setCarpoolMatches] = useState<CarpoolMatch[]>([]);
+  const [selectedCarpoolTripId, setSelectedCarpoolTripId] = useState<number | null>(null);
+  const [mapCarpoolRequest, setMapCarpoolRequest] = useState<CarpoolRiderInput | null>(null);
+  const [hasLoadedCarpools, setHasLoadedCarpools] = useState(false);
+  const [isSendingCarpoolRequest, setIsSendingCarpoolRequest] = useState<number | null>(null);
   const [isFetchingRoutes, setIsFetchingRoutes] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationPath, setSimulationPath] = useState<{ latitude: number; longitude: number }[] | null>(
@@ -240,10 +274,14 @@ export default function MapScreen() {
   );
   const [simulationIndex, setSimulationIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [summaryTrip, setSummaryTrip] = useState<TripRecord | TripPayload | null>(null);
   const [summaryVisible, setSummaryVisible] = useState(false);
   const [isSavingTrip, setIsSavingTrip] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [simulationDurationInput, setSimulationDurationInput] = useState(
+    String(DEFAULT_SIMULATION_DURATION_SECONDS)
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -398,6 +436,9 @@ export default function MapScreen() {
   }, [currentLocation, destinationInput, selectedDestinationSuggestion?.fullText]);
 
   const selectedRoute = routePlan?.options.find((route) => route.id === selectedRouteId) ?? null;
+  const selectedCarpoolMatch =
+    carpoolMatches.find((match) => match.tripId === selectedCarpoolTripId) ?? null;
+  const isCarpoolMode = selectedMode === 'carpool';
   const tracedPath =
     simulationPath && isSimulating ? simulationPath.slice(0, Math.max(simulationIndex + 1, 1)) : [];
   const simulationMarker =
@@ -418,6 +459,35 @@ export default function MapScreen() {
     (simulationIndex / Math.max((simulationPath?.length ?? 1) - 1, 1)) * 100
   );
   const canUseCurrentLocation = locationStatus === 'ready' && Boolean(currentLocation);
+
+  function applyLiveCarpoolData(nextMatches: CarpoolMatch[]) {
+    const visibleMatches = nextMatches.filter(isVisibleCarpoolMatch);
+
+    setCarpoolMatches(visibleMatches);
+    setSelectedCarpoolTripId((currentTripId) =>
+      visibleMatches.some((match) => match.tripId === currentTripId)
+        ? currentTripId
+        : (visibleMatches[0]?.tripId ?? null)
+    );
+    setHasLoadedCarpools(true);
+  }
+
+  async function refreshLiveCarpools(options?: { suppressErrors?: boolean }) {
+    if (!mapCarpoolRequest) {
+      return;
+    }
+
+    try {
+      const carpoolResult = await searchCarpools(mapCarpoolRequest);
+      applyLiveCarpoolData(carpoolResult.matches);
+    } catch (error) {
+      if (!options?.suppressErrors) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Unable to refresh live carpool updates.'
+        );
+      }
+    }
+  }
 
   function clearBlurTimeout() {
     if (blurTimeoutRef.current) {
@@ -465,7 +535,7 @@ export default function MapScreen() {
   }
 
   useEffect(() => {
-    if (!selectedRoute) {
+    if (!selectedRoute || isCarpoolMode) {
       return;
     }
 
@@ -478,7 +548,23 @@ export default function MapScreen() {
       },
       animated: true,
     });
-  }, [selectedRouteId, selectedRoute]);
+  }, [isCarpoolMode, selectedRouteId, selectedRoute]);
+
+  useEffect(() => {
+    if (!isCarpoolMode || !selectedCarpoolMatch?.pathPoints?.length) {
+      return;
+    }
+
+    mapRef.current?.fitToCoordinates(selectedCarpoolMatch.pathPoints, {
+      edgePadding: {
+        top: 180,
+        right: 48,
+        bottom: 260,
+        left: 48,
+      },
+      animated: true,
+    });
+  }, [isCarpoolMode, selectedCarpoolMatch]);
 
   useEffect(() => {
     if (!summaryVisible || !summaryTrip?.pathPoints?.length) {
@@ -499,6 +585,46 @@ export default function MapScreen() {
 
     return () => clearTimeout(timeout);
   }, [summaryTrip, summaryVisible]);
+
+  useEffect(() => {
+    if (!isFocused || !mapCarpoolRequest) {
+      return;
+    }
+
+    const currentMapCarpoolRequest = mapCarpoolRequest;
+    let isCancelled = false;
+    let isRefreshing = false;
+
+    async function pollLiveCarpools() {
+      if (isRefreshing || isCancelled) {
+        return;
+      }
+
+      isRefreshing = true;
+
+      try {
+        const carpoolResult = await searchCarpools(currentMapCarpoolRequest);
+
+        if (!isCancelled) {
+          applyLiveCarpoolData(carpoolResult.matches);
+        }
+      } catch {
+        // Keep background refresh silent so the screen stays stable on transient failures.
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    void pollLiveCarpools();
+    const interval = setInterval(() => {
+      void pollLiveCarpools();
+    }, CARPOOL_REFRESH_INTERVAL_MS);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [isFocused, mapCarpoolRequest, userId]);
 
   async function handleFindRoutes() {
     const trimmedDestination = destinationInput.trim();
@@ -555,6 +681,7 @@ export default function MapScreen() {
     const destinationLabel = selectedDestinationSuggestion?.fullText ?? trimmedDestination;
 
     setErrorMessage(null);
+    setStatusMessage(null);
     setSaveError(null);
     setActiveField(null);
     setOriginSuggestions([]);
@@ -563,6 +690,10 @@ export default function MapScreen() {
     setIsSimulating(false);
     setSimulationPath(null);
     setSimulationIndex(0);
+    setHasLoadedCarpools(false);
+    setCarpoolMatches([]);
+    setSelectedCarpoolTripId(null);
+    setMapCarpoolRequest(null);
 
     try {
       let nextRoutePlan: RoutePlan;
@@ -618,9 +749,32 @@ export default function MapScreen() {
 
       setRoutePlan(nextRoutePlan);
       setSelectedRouteId(nextRoutePlan.options[0]?.id ?? null);
+      setSelectedMode(nextRoutePlan.options[0]?.kind ?? null);
+      const drivingOption = nextRoutePlan.options.find((option) => option.kind === 'drive');
+
+      const nextCarpoolRequest: CarpoolRiderInput = {
+        riderId: userId,
+        pickupLabel: nextRoutePlan.originLabel,
+        dropoffLabel: nextRoutePlan.destinationLabel,
+        pickupPoint: nextRoutePlan.origin,
+        dropoffPoint: nextRoutePlan.destination,
+        routeDistanceMeters: drivingOption?.distanceMeters ?? null,
+      };
+
+      setMapCarpoolRequest(nextCarpoolRequest);
+
+      try {
+        const carpoolResult = await searchCarpools(nextCarpoolRequest);
+        applyLiveCarpoolData(carpoolResult.matches);
+      } catch {
+        setCarpoolMatches([]);
+      } finally {
+        setHasLoadedCarpools(true);
+      }
     } catch (error) {
       setRoutePlan(null);
       setSelectedRouteId(null);
+      setSelectedMode(null);
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load routes right now.');
     } finally {
       setIsFetchingRoutes(false);
@@ -674,13 +828,25 @@ export default function MapScreen() {
       return;
     }
 
+    const simulationDurationSeconds = Number(simulationDurationInput);
+
+    if (!Number.isFinite(simulationDurationSeconds) || simulationDurationSeconds <= 0) {
+      setErrorMessage('Demo time must be greater than 0 seconds.');
+      return;
+    }
+
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
 
     const sampledPath = samplePolyline(selectedRoute.polyline);
+    const intervalMs = Math.max(
+      60,
+      Math.round((simulationDurationSeconds * 1000) / Math.max(sampledPath.length - 1, 1))
+    );
 
     setSaveError(null);
+    setStatusMessage(null);
     setSummaryTrip(null);
     setSummaryVisible(false);
     setSimulationPath(sampledPath);
@@ -715,7 +881,29 @@ export default function MapScreen() {
 
         return nextIndex;
       });
-    }, 220);
+    }, intervalMs);
+  }
+
+  async function handleSendCarpoolRequest(tripId: number) {
+    if (!mapCarpoolRequest) {
+      return;
+    }
+
+    setIsSendingCarpoolRequest(tripId);
+    setErrorMessage(null);
+    setStatusMessage(null);
+
+    try {
+      await requestCarpoolSeat(tripId, mapCarpoolRequest);
+      setStatusMessage('Request sent. The host can accept it from the Carpool tab.');
+      await refreshLiveCarpools();
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Unable to send the carpool request.'
+      );
+    } finally {
+      setIsSendingCarpoolRequest(null);
+    }
   }
 
   function handleCloseSummary() {
@@ -852,31 +1040,69 @@ export default function MapScreen() {
           onRegionChangeComplete={(region) => {
             regionRef.current = region;
           }}>
-          {routePlan?.options.map((route) => {
-            const isSelected = route.id === selectedRouteId;
+          {!isCarpoolMode
+            ? routePlan?.options.map((route) => {
+                const isSelected = route.id === selectedRouteId;
 
-            return (
-              <Polyline
-                key={route.id}
-                coordinates={route.polyline}
-                strokeColor={route.color}
-                strokeWidth={isSelected ? 6 : 4}
-                lineCap="round"
-                lineJoin="round"
-                tappable
-                onPress={() => !isSimulating && setSelectedRouteId(route.id)}
-                zIndex={isSelected ? 5 : 2}
-              />
-            );
-          })}
+                return (
+                  <Polyline
+                    key={route.id}
+                    coordinates={route.polyline}
+                    strokeColor={route.color}
+                    strokeWidth={isSelected ? 6 : 4}
+                    lineCap="round"
+                    lineJoin="round"
+                    tappable
+                    onPress={() => {
+                      if (isSimulating) {
+                        return;
+                      }
 
-          {selectedRoute ? (
+                      setSelectedMode(route.kind);
+                      setSelectedRouteId(route.id);
+                    }}
+                    zIndex={isSelected ? 5 : 2}
+                  />
+                );
+              })
+            : null}
+
+          {isCarpoolMode && selectedCarpoolMatch ? (
+            <Polyline
+              coordinates={selectedCarpoolMatch.pathPoints}
+              strokeColor={palette.accentAlt}
+              strokeWidth={6}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={5}
+            />
+          ) : null}
+
+          {!isCarpoolMode && selectedRoute ? (
             <>
               <Marker coordinate={selectedRoute.start} title="Start" description={routePlan?.originLabel} />
               <Marker
                 coordinate={selectedRoute.end}
                 title="Destination"
                 description={routePlan?.destinationLabel}
+              />
+            </>
+          ) : null}
+
+          {isCarpoolMode && selectedCarpoolMatch ? (
+            <>
+              <Marker
+                coordinate={mapCarpoolRequest?.pickupPoint ?? selectedCarpoolMatch.pathPoints[0]}
+                title="Your pickup"
+                description={mapCarpoolRequest?.pickupLabel ?? routePlan?.originLabel}
+              />
+              <Marker
+                coordinate={
+                  mapCarpoolRequest?.dropoffPoint ??
+                  selectedCarpoolMatch.pathPoints[selectedCarpoolMatch.pathPoints.length - 1]
+                }
+                title="Your destination"
+                description={mapCarpoolRequest?.dropoffLabel ?? routePlan?.destinationLabel}
               />
             </>
           ) : null}
@@ -1018,6 +1244,8 @@ export default function MapScreen() {
                   </View>
                 ) : null}
 
+                <ProfileDropdown palette={palette} compact={shouldCompactSearchPanel} />
+
                 <View style={[styles.inputGroup, shouldCompactSearchPanel ? styles.inputGroupCompact : null]}>
                   <View style={styles.originRow}>
                     <TextInput
@@ -1140,6 +1368,42 @@ export default function MapScreen() {
                   <ThemedText style={styles.primaryButtonText}>Find low-carbon routes</ThemedText>
                 </Pressable>
 
+                <View
+                  style={[
+                    styles.simulationControlRow,
+                    {
+                      backgroundColor: palette.cardSecondary,
+                      borderColor: palette.border,
+                    },
+                  ]}>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>
+                      Demo Time
+                    </ThemedText>
+                    <ThemedText style={{ color: palette.text }}>
+                      Choose how long the map replay should last.
+                    </ThemedText>
+                  </View>
+                  <View style={styles.simulationDurationInputWrap}>
+                    <TextInput
+                      value={simulationDurationInput}
+                      onChangeText={setSimulationDurationInput}
+                      keyboardType="numbers-and-punctuation"
+                      placeholder="45"
+                      placeholderTextColor={palette.muted}
+                      style={[
+                        styles.simulationDurationInput,
+                        {
+                          color: palette.text,
+                          backgroundColor: palette.input,
+                          borderColor: palette.border,
+                        },
+                      ]}
+                    />
+                    <ThemedText style={{ color: palette.muted }}>sec</ThemedText>
+                  </View>
+                </View>
+
                 {errorMessage ? (
                   <View
                     style={[
@@ -1153,6 +1417,21 @@ export default function MapScreen() {
                     <ThemedText style={{ color: palette.text, flex: 1 }}>{errorMessage}</ThemedText>
                   </View>
                 ) : null}
+
+                {statusMessage ? (
+                  <View
+                    style={[
+                      styles.messageRow,
+                      {
+                        backgroundColor: colorScheme === 'dark' ? '#15261B' : '#F0F8F2',
+                        borderColor: colorScheme === 'dark' ? '#2C5A3B' : '#BFD8C4',
+                      },
+                    ]}>
+                    <MaterialIcons name="check-circle-outline" size={18} color={palette.accent} />
+                    <ThemedText style={{ color: palette.text, flex: 1 }}>{statusMessage}</ThemedText>
+                  </View>
+                ) : null}
+
               </View>
 
               {routePlan ? (
@@ -1173,20 +1452,40 @@ export default function MapScreen() {
                           borderColor: palette.border,
                         },
                       ]}>
-                      {routePlan.options.map((route) => {
-                        const isSelected = selectedRouteId === route.id;
+                      {[
+                        ...routePlan.options.map((route) => ({
+                          key: route.kind,
+                          route,
+                          color: route.color,
+                        })),
+                        ...(hasLoadedCarpools
+                          ? [
+                              {
+                                key: 'carpool' as const,
+                                route: null,
+                                color: palette.accentAlt,
+                              },
+                            ]
+                          : []),
+                      ].map((tab) => {
+                        const isSelected = selectedMode === tab.key;
 
                         return (
                           <Pressable
-                            key={route.id}
+                            key={tab.key}
                             disabled={isSimulating}
-                            onPress={() => setSelectedRouteId(route.id)}
+                            onPress={() => {
+                              setSelectedMode(tab.key);
+                              if (tab.route) {
+                                setSelectedRouteId(tab.route.id);
+                              }
+                            }}
                             style={[
                               styles.modeTab,
                               isSelected
                                 ? {
-                                    backgroundColor: route.color,
-                                    borderColor: route.color,
+                                    backgroundColor: tab.color,
+                                    borderColor: tab.color,
                                   }
                                 : {
                                     backgroundColor: 'transparent',
@@ -1194,23 +1493,23 @@ export default function MapScreen() {
                                   },
                             ]}>
                             <MaterialIcons
-                              name={getRouteIcon(route.kind)}
+                              name={getTransportTabIcon(tab.key)}
                               size={16}
-                              color={isSelected ? '#FFFFFF' : route.color}
+                              color={isSelected ? '#FFFFFF' : tab.color}
                             />
                             <ThemedText
                               style={[
                                 styles.modeTabText,
                                 { color: isSelected ? '#FFFFFF' : palette.text },
                               ]}>
-                              {getRouteTabLabel(route.kind)}
+                              {getTransportTabLabel(tab.key)}
                             </ThemedText>
                           </Pressable>
                         );
                       })}
                     </View>
 
-                    {selectedRoute ? (
+                    {!isCarpoolMode && selectedRoute ? (
                       <View
                         style={[
                           styles.routeCard,
@@ -1308,6 +1607,176 @@ export default function MapScreen() {
                             {getRouteStartLabel(selectedRoute.kind, isSimulating)}
                           </ThemedText>
                         </Pressable>
+                      </View>
+                    ) : null}
+
+                    {isCarpoolMode ? (
+                      <View
+                        style={[
+                          styles.routeCard,
+                          {
+                            backgroundColor: palette.card,
+                            borderColor: palette.accentAlt,
+                          },
+                        ]}>
+                        <View style={styles.routeHeader}>
+                          <View
+                            style={[
+                              styles.routeIcon,
+                              {
+                                backgroundColor: `${palette.accentAlt}20`,
+                              },
+                            ]}>
+                            <MaterialIcons name="groups" size={22} color={palette.accentAlt} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
+                              Scheduled carpools
+                            </ThemedText>
+                            <ThemedText style={[styles.routeSubtitle, { color: palette.muted }]}>
+                              Matching hosted trips for your source and destination.
+                            </ThemedText>
+                          </View>
+                        </View>
+
+                        {carpoolMatches.length === 0 ? (
+                          <View
+                            style={[
+                              styles.messageRow,
+                              {
+                                backgroundColor: colorScheme === 'dark' ? '#1C241E' : '#F5FAF4',
+                                borderColor: palette.border,
+                              },
+                            ]}>
+                            <MaterialIcons name="search-off" size={18} color={palette.accentAlt} />
+                            <ThemedText style={{ color: palette.text, flex: 1 }}>
+                              No scheduled carpools match this trip yet. Try another route or host one from
+                              the Carpool tab.
+                            </ThemedText>
+                          </View>
+                        ) : (
+                          carpoolMatches.map((match) => {
+                            const isSelected = match.tripId === selectedCarpoolTripId;
+                            const requestLabel = match.existingRequestStatus
+                              ? 'Request already sent'
+                              : isSendingCarpoolRequest === match.tripId
+                                ? 'Sending request...'
+                                : 'Send rider request';
+
+                            return (
+                              <View
+                                key={match.tripId}
+                                style={[
+                                  styles.carpoolMatchCard,
+                                  {
+                                    backgroundColor: isSelected ? `${palette.accentAlt}16` : palette.cardSecondary,
+                                    borderColor: isSelected ? palette.accentAlt : palette.border,
+                                  },
+                                ]}>
+                                <View style={styles.routeHeader}>
+                                  <View style={{ flex: 1 }}>
+                                    <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
+                                      {match.hostDisplayName}
+                                    </ThemedText>
+                                    <ThemedText style={[styles.routeSubtitle, { color: palette.muted }]}>
+                                      Host departs {formatTripDate(match.startedAt)}
+                                    </ThemedText>
+                                  </View>
+                                  <View
+                                    style={[
+                                      styles.badge,
+                                      { backgroundColor: `${palette.accentAlt}18` },
+                                    ]}>
+                                    <ThemedText style={[styles.badgeText, { color: palette.accentAlt }]}>
+                                      {match.remainingSeats} seats
+                                    </ThemedText>
+                                  </View>
+                                </View>
+
+                                <View style={styles.metricRow}>
+                                  <View style={styles.metricCard}>
+                                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>Fare</ThemedText>
+                                    <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                                      ${match.quotedPrice.toFixed(2)}
+                                    </ThemedText>
+                                  </View>
+                                  <View style={styles.metricCard}>
+                                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>
+                                      Shared Time
+                                    </ThemedText>
+                                    <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                                      {formatDuration(match.durationSeconds)}
+                                    </ThemedText>
+                                  </View>
+                                  <View style={styles.metricCard}>
+                                    <ThemedText style={[styles.metricLabel, { color: palette.muted }]}>
+                                      Radius
+                                    </ThemedText>
+                                    <ThemedText style={[styles.metricValueSmall, { color: palette.text }]}>
+                                      {match.maxDetourValue != null ? `${match.maxDetourValue} mi` : '--'}
+                                    </ThemedText>
+                                  </View>
+                                </View>
+
+                                <ThemedText style={[styles.routeBodyText, { color: palette.text }]}>
+                                  Pickup gap {formatDistance(match.pickupDistanceMeters)} and drop-off gap{' '}
+                                  {formatDistance(match.dropoffDistanceMeters)} from the host start/end radius.
+                                </ThemedText>
+                                <ThemedText style={[styles.routeBodyText, { color: palette.muted }]}>
+                                  Host route: {match.originLabel} to {match.destinationLabel}. A rider can
+                                  match when either endpoint falls inside the host radius.
+                                </ThemedText>
+
+                                <View style={styles.carpoolActionRow}>
+                                  <Pressable
+                                    onPress={() => {
+                                      setSelectedCarpoolTripId(match.tripId);
+                                      setSelectedMode('carpool');
+                                    }}
+                                    style={[
+                                      styles.carpoolActionButton,
+                                      {
+                                        backgroundColor: isSelected ? palette.accentAlt : palette.card,
+                                        borderColor: palette.border,
+                                      },
+                                    ]}>
+                                    <MaterialIcons
+                                      name="map"
+                                      size={18}
+                                      color={isSelected ? '#FFFFFF' : palette.text}
+                                    />
+                                    <ThemedText
+                                      style={{ color: isSelected ? '#FFFFFF' : palette.text, fontWeight: '700' }}>
+                                      {isSelected ? 'Showing on map' : 'Preview on map'}
+                                    </ThemedText>
+                                  </Pressable>
+
+                                  <Pressable
+                                    disabled={Boolean(match.existingRequestStatus) || isSendingCarpoolRequest === match.tripId}
+                                    onPress={() => void handleSendCarpoolRequest(match.tripId)}
+                                    style={[
+                                      styles.carpoolActionButton,
+                                      {
+                                        backgroundColor:
+                                          match.existingRequestStatus || isSendingCarpoolRequest === match.tripId
+                                            ? '#98A59A'
+                                            : palette.accentAlt,
+                                        borderColor:
+                                          match.existingRequestStatus || isSendingCarpoolRequest === match.tripId
+                                            ? '#98A59A'
+                                            : palette.accentAlt,
+                                      },
+                                    ]}>
+                                    <MaterialIcons name="send" size={18} color="#FFFFFF" />
+                                    <ThemedText style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                                      {requestLabel}
+                                    </ThemedText>
+                                  </Pressable>
+                                </View>
+                              </View>
+                            );
+                          })
+                        )}
                       </View>
                     ) : null}
                   </ScrollView>
@@ -1619,6 +2088,30 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
+  simulationControlRow: {
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  simulationDurationInputWrap: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  simulationDurationInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    minWidth: 68,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   messageRow: {
     borderRadius: 14,
     borderWidth: 1,
@@ -1680,6 +2173,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 22,
     padding: 14,
+    gap: 10,
+  },
+  carpoolMatchCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 12,
     gap: 10,
   },
   routeHeader: {
@@ -1747,6 +2246,21 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     justifyContent: 'center',
     alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  carpoolActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  carpoolActionButton: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
   },

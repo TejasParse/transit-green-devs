@@ -53,6 +53,11 @@ function mapTripRow(row) {
     co2Kg: Number(row.co2_kg),
     co2SavedKg: Number(row.co2_saved_kg),
     availableSeats: row.available_seats,
+    carpoolEnabled: row.carpool_enabled,
+    maxDetourType: row.max_detour_type,
+    maxDetourValue: row.max_detour_value == null ? null : Number(row.max_detour_value),
+    pricePerSeatMile: row.price_per_seat_mile == null ? null : Number(row.price_per_seat_mile),
+    simulationSpeedMultiplier: Number(row.simulation_speed_multiplier ?? 1),
     status: row.status,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -101,6 +106,27 @@ async function getTripsByUserId(userId) {
   );
 
   return result.rows.map(mapTripRow);
+}
+
+async function getTripRecordById(tripId, db = pool) {
+  const result = await db.query(
+    `
+      SELECT
+        trips.*,
+        profiles.user_name AS display_name
+      FROM trips
+      INNER JOIN profiles ON profiles.id = trips.user_id
+      WHERE trips.id = $1
+      LIMIT 1
+    `,
+    [tripId]
+  );
+
+  if (result.rowCount === 0) {
+    throw new Error(`Trip ${tripId} does not exist.`);
+  }
+
+  return mapTripRow(result.rows[0]);
 }
 
 async function getLeaderboardEntries(options = {}) {
@@ -219,6 +245,11 @@ async function createTripRecord(trip) {
           co2_kg,
           co2_saved_kg,
           available_seats,
+          carpool_enabled,
+          max_detour_type,
+          max_detour_value,
+          price_per_seat_mile,
+          simulation_speed_multiplier,
           status,
           started_at,
           completed_at,
@@ -227,7 +258,8 @@ async function createTripRecord(trip) {
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb
+          $9, $10, $11, $12, $13, $14, $15, $16,
+          $17, $18, $19::jsonb, $20::jsonb
         )
         RETURNING *
       `,
@@ -242,6 +274,11 @@ async function createTripRecord(trip) {
         trip.co2Kg,
         trip.co2SavedKg,
         trip.availableSeats ?? 0,
+        trip.carpoolEnabled ?? false,
+        trip.maxDetourType ?? null,
+        trip.maxDetourValue ?? null,
+        trip.pricePerSeatMile ?? null,
+        trip.simulationSpeedMultiplier ?? 1,
         trip.status ?? 'ended',
         trip.startedAt,
         trip.completedAt,
@@ -262,9 +299,85 @@ async function createTripRecord(trip) {
   }
 }
 
+async function updateTripRecordStatus({
+  tripId,
+  userId,
+  status,
+  startedAt = null,
+  completedAt = null,
+  simulationSpeedMultiplier = null,
+}) {
+  await pool.query('BEGIN');
+
+  try {
+    const currentResult = await pool.query(
+      `
+        SELECT
+          trips.*,
+          profiles.user_name AS display_name
+        FROM trips
+        INNER JOIN profiles ON profiles.id = trips.user_id
+        WHERE trips.id = $1
+          AND trips.user_id = $2
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [tripId, userId]
+    );
+
+    if (currentResult.rowCount === 0) {
+      throw new Error(`Trip ${tripId} does not exist for host ${userId}.`);
+    }
+
+    const currentTrip = currentResult.rows[0];
+    const nextStatus = status ?? currentTrip.status;
+    const result = await pool.query(
+      `
+        UPDATE trips
+        SET
+          status = $3,
+          started_at = COALESCE($4, started_at),
+          completed_at = COALESCE($5, completed_at),
+          simulation_speed_multiplier = COALESCE($6, simulation_speed_multiplier)
+        WHERE id = $1
+          AND user_id = $2
+        RETURNING *
+      `,
+      [tripId, userId, nextStatus, startedAt, completedAt, simulationSpeedMultiplier]
+    );
+
+    if (currentTrip.status !== 'ended' && nextStatus === 'ended') {
+      const pointsToAward = Math.max(Math.round(Number(currentTrip.co2_saved_kg) * 100), 0);
+
+      if (pointsToAward > 0) {
+        await pool.query(
+          `
+            UPDATE profiles
+            SET total_points = total_points + $2
+            WHERE id = $1
+          `,
+          [userId, pointsToAward]
+        );
+      }
+    }
+
+    await pool.query('COMMIT');
+
+    return mapTripRow({
+      ...result.rows[0],
+      display_name: currentTrip.display_name,
+    });
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    throw error;
+  }
+}
+
 module.exports = {
   checkDatabaseHealth,
   createTripRecord,
+  getTripRecordById,
   getLeaderboardEntries,
   getTripsByUserId,
+  updateTripRecordStatus,
 };
