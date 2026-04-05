@@ -1280,9 +1280,37 @@ export default function MapScreen() {
   }
 
   async function handleDriveToEcoDestination(destination: EcoDestination) {
-    if (!currentLocation) {
-      setErrorMessage('Your current location is not ready yet. Allow location access and try again.');
-      return;
+    const trimmedOrigin = originInput.trim();
+    let origin: WaypointInput;
+    let originLabel: string;
+
+    if (useCurrentLocation) {
+      if (!currentLocation) {
+        setErrorMessage('Your current location is not ready yet. Allow location access and try again.');
+        return;
+      }
+
+      origin = {
+        type: 'coordinates',
+        coordinates: currentLocation,
+      };
+      originLabel = 'Current location';
+    } else {
+      if (!trimmedOrigin) {
+        setErrorMessage('Enter a start location before driving to a destination.');
+        return;
+      }
+
+      origin = selectedOriginSuggestion?.placeId
+        ? {
+            type: 'placeId',
+            placeId: selectedOriginSuggestion.placeId,
+          }
+        : {
+            type: 'address',
+            address: trimmedOrigin,
+          };
+      originLabel = selectedOriginSuggestion?.fullText ?? trimmedOrigin;
     }
 
     setErrorMessage(null);
@@ -1290,10 +1318,7 @@ export default function MapScreen() {
     setCarpoolError(null);
     setCarpoolMessage(null);
     setIsFetchingRoutes(true);
-    setUseCurrentLocation(true);
-    setOriginInput('Current location');
     setDestinationInput(destination.address);
-    setSelectedOriginSuggestion(null);
     setSelectedDestinationSuggestion(null);
     setSelectedEcoDestination(destination);
     setIsSimulating(false);
@@ -1302,15 +1327,12 @@ export default function MapScreen() {
 
     try {
       const nextRoutePlan = await buildRoutePlan({
-        origin: {
-          type: 'coordinates',
-          coordinates: currentLocation,
-        },
+        origin,
         destination: {
           type: 'coordinates',
           coordinates: destination.coordinates,
         },
-        originLabel: 'Current location',
+        originLabel,
         destinationLabel: destination.address,
       });
 
