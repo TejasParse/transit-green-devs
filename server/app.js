@@ -2,6 +2,7 @@ const express = require('express');
 
 const carpoolRoutes = require('./routes/carpool-routes');
 const dashboardRoutes = require('./routes/dashboard-routes');
+const ecoDestinationRoutes = require('./routes/eco-destination-routes');
 const healthRoutes = require('./routes/health-routes');
 const tripRoutes = require('./routes/trip-routes');
 const { errorHandler } = require('./middleware/error-handler');
@@ -23,6 +24,7 @@ app.use((req, res, next) => {
 });
 
 app.use(healthRoutes);
+app.use(ecoDestinationRoutes);
 app.use(dashboardRoutes);
 app.use(carpoolRoutes);
 app.use(tripRoutes);

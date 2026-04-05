@@ -19,6 +19,7 @@ import {
   completeCarpool,
   createCarpool,
   createTrip,
+  fetchEcoDestinations,
   fetchMyCarpools,
   requestCarpoolSeat,
   searchCarpools,
@@ -37,6 +38,7 @@ import {
 import { createAutocompleteSessionToken, fetchPlaceSuggestions } from '@/lib/google-places';
 import { buildDriveRouteWithStops, buildRoutePlan } from '@/lib/google-routes';
 import { useUserProfile } from '@/context/user-context';
+import { EcoDestination, EcoDestinationCategory } from '@/types/eco-destinations';
 import {
   AddressSuggestion,
   CarpoolRequestRecord,
@@ -71,6 +73,47 @@ const CARPOOL_COLOR = '#B85C25';
 const DEFAULT_CARPOOL_SEARCH_WINDOW_MINUTES = 45;
 const CARPOOL_POLL_INTERVAL_MS = 5000;
 const ACTIVE_CARPOOL_STATUSES = ['draft', 'scheduled', 'confirmed', 'active'] as const;
+const ECO_DESTINATION_CATEGORY_OPTIONS: {
+  id: EcoDestinationCategory;
+  label: string;
+  icon: ComponentProps<typeof MaterialIcons>['name'];
+  color: string;
+}[] = [
+  {
+    id: 'sustainable_ev_hubs',
+    label: 'Sustainable EV Hubs',
+    icon: 'ev-station',
+    color: '#1F8E5F',
+  },
+  {
+    id: 'reuse_donation_center',
+    label: 'Reuse & Donation',
+    icon: 'redeem',
+    color: '#C96E1A',
+  },
+  {
+    id: 'recycling_specialized_waste_dropoff',
+    label: 'Recycling Drop-Off',
+    icon: 'recycling',
+    color: '#2E70C9',
+  },
+];
+
+function getEcoCategoryMeta(category: EcoDestinationCategory) {
+  return (
+    ECO_DESTINATION_CATEGORY_OPTIONS.find((option) => option.id === category) ??
+    ECO_DESTINATION_CATEGORY_OPTIONS[0]
+  );
+}
+
+function isWithinGreaterPhoenix(location: { latitude: number; longitude: number }) {
+  return (
+    location.latitude >= 33.1 &&
+    location.latitude <= 33.85 &&
+    location.longitude >= -112.45 &&
+    location.longitude <= -111.55
+  );
+}
 
 function buildRegion(points: { latitude: number; longitude: number }[]): Region {
   if (points.length === 0) {
@@ -638,6 +681,12 @@ export default function MapScreen() {
   const [isSavingTrip, setIsSavingTrip] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveStatusMessage, setSaveStatusMessage] = useState<string | null>(null);
+  const [ecoDestinations, setEcoDestinations] = useState<EcoDestination[]>([]);
+  const [isLoadingEcoDestinations, setIsLoadingEcoDestinations] = useState(false);
+  const [ecoDestinationError, setEcoDestinationError] = useState<string | null>(null);
+  const [selectedEcoCategory, setSelectedEcoCategory] = useState<EcoDestinationCategory | null>(null);
+  const [selectedEcoDestination, setSelectedEcoDestination] = useState<EcoDestination | null>(null);
+  const [locationHint, setLocationHint] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -665,14 +714,26 @@ export default function MapScreen() {
           return;
         }
 
-        const nextLocation = {
+        const resolvedLocation = {
           latitude: currentPosition.coords.latitude,
           longitude: currentPosition.coords.longitude,
         };
 
+        const nextLocation = isWithinGreaterPhoenix(resolvedLocation)
+          ? resolvedLocation
+          : {
+              latitude: DEFAULT_REGION.latitude,
+              longitude: DEFAULT_REGION.longitude,
+            };
+
         setCurrentLocation(nextLocation);
         setLocationStatus('ready');
         setOriginInput('Current location');
+        setLocationHint(
+          isWithinGreaterPhoenix(resolvedLocation)
+            ? null
+            : 'Simulator location was outside Greater Phoenix, so the app is using a Phoenix fallback.'
+        );
         mapRef.current?.animateToRegion(
           {
             ...nextLocation,
@@ -702,6 +763,39 @@ export default function MapScreen() {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadEcoDestinations() {
+      setIsLoadingEcoDestinations(true);
+
+      try {
+        const nextDestinations = await fetchEcoDestinations();
+
+        if (!isCancelled) {
+          setEcoDestinations(nextDestinations);
+          setEcoDestinationError(null);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setEcoDestinationError(
+            error instanceof Error ? error.message : 'Unable to load eco destinations right now.'
+          );
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingEcoDestinations(false);
+        }
+      }
+    }
+
+    void loadEcoDestinations();
+
+    return () => {
+      isCancelled = true;
     };
   }, []);
 
@@ -871,6 +965,9 @@ export default function MapScreen() {
     simulationPath && simulationPath.length > 0
       ? simulationPath[Math.min(simulationIndex, simulationPath.length - 1)]
       : null;
+  const visibleEcoDestinations = selectedEcoCategory
+    ? ecoDestinations.filter((destination) => destination.category === selectedEcoCategory)
+    : [];
 
   const summaryRegion = useMemo(
     () => buildRegion(summaryTrip?.pathPoints ?? selectedRoute?.polyline ?? []),
@@ -1173,6 +1270,66 @@ export default function MapScreen() {
     originSessionTokenRef.current = createAutocompleteSessionToken();
     if (activeField === 'origin') {
       setActiveField(null);
+    }
+  }
+
+  function handleSelectEcoCategory(category: EcoDestinationCategory) {
+    const nextCategory = selectedEcoCategory === category ? null : category;
+    setSelectedEcoCategory(nextCategory);
+    setSelectedEcoDestination(null);
+  }
+
+  async function handleDriveToEcoDestination(destination: EcoDestination) {
+    if (!currentLocation) {
+      setErrorMessage('Your current location is not ready yet. Allow location access and try again.');
+      return;
+    }
+
+    setErrorMessage(null);
+    setSaveError(null);
+    setCarpoolError(null);
+    setCarpoolMessage(null);
+    setIsFetchingRoutes(true);
+    setUseCurrentLocation(true);
+    setOriginInput('Current location');
+    setDestinationInput(destination.address);
+    setSelectedOriginSuggestion(null);
+    setSelectedDestinationSuggestion(null);
+    setSelectedEcoDestination(destination);
+    setIsSimulating(false);
+    setSimulationPath(null);
+    setSimulationIndex(0);
+
+    try {
+      const nextRoutePlan = await buildRoutePlan({
+        origin: {
+          type: 'coordinates',
+          coordinates: currentLocation,
+        },
+        destination: {
+          type: 'coordinates',
+          coordinates: destination.coordinates,
+        },
+        originLabel: 'Current location',
+        destinationLabel: destination.address,
+      });
+
+      setRoutePlan(nextRoutePlan);
+      setSelectedRouteId(
+        nextRoutePlan.options.find((route) => route.kind === 'drive')?.id ??
+          nextRoutePlan.options[0]?.id ??
+          null
+      );
+    } catch (error) {
+      setRoutePlan(null);
+      setSelectedRouteId(null);
+      setCarpoolSearchResult(null);
+      setSelectedCarpoolTripId(null);
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Unable to build the driving route right now.'
+      );
+    } finally {
+      setIsFetchingRoutes(false);
     }
   }
 
@@ -1735,6 +1892,53 @@ export default function MapScreen() {
     } finally {
       setIsFetchingRoutes(false);
     }
+  }
+
+  function handleClearNavigationState() {
+    clearBlurTimeout();
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    setDestinationInput('');
+    setSelectedDestinationSuggestion(null);
+    destinationSessionTokenRef.current = createAutocompleteSessionToken();
+    setRoutePlan(null);
+    setSelectedRouteId(null);
+    setCarpoolSearchResult(null);
+    setSelectedCarpoolTripId(null);
+    setCarpoolDetourRoute(null);
+    setCarpoolError(null);
+    setCarpoolMessage(null);
+    setErrorMessage(null);
+    setSaveError(null);
+    setSaveStatusMessage(null);
+    setSummaryTrip(null);
+    setSummaryVisible(false);
+    setIsSavingTrip(false);
+    setIsFetchingRoutes(false);
+    setIsSimulating(false);
+    setSimulationPath(null);
+    setSimulationIndex(0);
+    setSelectedEcoCategory(null);
+    setSelectedEcoDestination(null);
+    setActiveField(null);
+    tripStartedAtRef.current = null;
+    sharedRideTripIdRef.current = null;
+    lastResolvedDetourKeyRef.current = null;
+
+    const nextRegion = currentLocation
+      ? {
+          ...currentLocation,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        }
+      : DEFAULT_REGION;
+
+    mapRef.current?.animateToRegion(nextRegion, 500);
+    regionRef.current = nextRegion;
   }
 
   async function handleCompleteTrip(
@@ -3000,6 +3204,32 @@ export default function MapScreen() {
               ))
             : null}
 
+          {visibleEcoDestinations.map((destination) => {
+            const categoryMeta = getEcoCategoryMeta(destination.category);
+            const isSelected = selectedEcoDestination?.id === destination.id;
+
+            return (
+              <Marker
+                key={`eco-destination-${destination.id}`}
+                coordinate={destination.coordinates}
+                title={destination.name}
+                description={destination.address}
+                onPress={() => {
+                  setSelectedEcoDestination(destination);
+                }}>
+                <View
+                  style={[
+                    styles.ecoMapMarker,
+                    {
+                      backgroundColor: isSelected ? categoryMeta.color : `${categoryMeta.color}D8`,
+                    },
+                  ]}>
+                  <MaterialIcons name={categoryMeta.icon} size={18} color="#FFFFFF" />
+                </View>
+              </Marker>
+            );
+          })}
+
           {selectedRoute ? (
             <>
               <Marker coordinate={selectedRoute.start} title="Start" description={routePlan?.originLabel} />
@@ -3074,6 +3304,128 @@ export default function MapScreen() {
             <MaterialIcons name="remove" size={20} color={palette.text} />
           </Pressable>
         </View>
+
+        {!isSimulating ? (
+          <View pointerEvents="box-none" style={styles.ecoCategoryOverlay}>
+            <View
+              style={[
+                styles.ecoCategoryRail,
+                {
+                  backgroundColor: palette.card,
+                  borderColor: palette.border,
+                },
+              ]}>
+              {ECO_DESTINATION_CATEGORY_OPTIONS.map((option) => {
+                const isSelected = selectedEcoCategory === option.id;
+
+                return (
+                  <Pressable
+                    key={option.id}
+                    onPress={() => handleSelectEcoCategory(option.id)}
+                    style={[
+                      styles.ecoCategoryChip,
+                      {
+                        backgroundColor: isSelected ? `${option.color}1A` : palette.cardSecondary,
+                        borderColor: isSelected ? option.color : palette.border,
+                      },
+                    ]}>
+                    <MaterialIcons
+                      name={option.icon}
+                      size={22}
+                      color={isSelected ? option.color : palette.text}
+                    />
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
+
+        {!isSimulating && selectedEcoCategory ? (
+          <View pointerEvents="box-none" style={styles.ecoDetailsOverlay}>
+            <View
+              style={[
+                styles.ecoDetailsCard,
+                {
+                  backgroundColor: palette.card,
+                  borderColor: palette.border,
+                },
+              ]}>
+              {selectedEcoDestination ? (
+                <>
+                  <View style={styles.ecoDetailsHeader}>
+                    <View
+                      style={[
+                        styles.ecoDetailsIcon,
+                        {
+                          backgroundColor: `${getEcoCategoryMeta(selectedEcoDestination.category).color}20`,
+                        },
+                      ]}>
+                      <MaterialIcons
+                        name={getEcoCategoryMeta(selectedEcoDestination.category).icon}
+                        size={22}
+                        color={getEcoCategoryMeta(selectedEcoDestination.category).color}
+                      />
+                    </View>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
+                        {selectedEcoDestination.name}
+                      </ThemedText>
+                      <ThemedText style={{ color: palette.muted }}>
+                        {selectedEcoDestination.address}
+                      </ThemedText>
+                    </View>
+                  </View>
+
+                  <View style={styles.badgeRow}>
+                    {selectedEcoDestination.features.map((feature) => (
+                      <View
+                        key={`${selectedEcoDestination.id}-${feature}`}
+                        style={[
+                          styles.routeBadge,
+                          {
+                            backgroundColor: palette.cardSecondary,
+                            borderColor: palette.border,
+                          },
+                        ]}>
+                        <ThemedText style={[styles.badgeText, { color: palette.text }]}>
+                          {feature}
+                        </ThemedText>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Pressable
+                    onPress={() => {
+                      void handleDriveToEcoDestination(selectedEcoDestination);
+                    }}
+                    style={[styles.carpoolPrimaryButton, { backgroundColor: palette.accent }]}>
+                    <MaterialIcons name="directions-car" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.primaryButtonText}>Drive</ThemedText>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <ThemedText style={[styles.routeTitle, { color: palette.text }]}>
+                    {getEcoCategoryMeta(selectedEcoCategory).label}
+                  </ThemedText>
+                  <ThemedText style={{ color: palette.muted }}>
+                    Tap a marker in the Greater Phoenix area to view the location details and start a drive there from your current location.
+                  </ThemedText>
+                  {locationHint ? (
+                    <ThemedText style={{ color: palette.accentAlt }}>{locationHint}</ThemedText>
+                  ) : null}
+                  {isLoadingEcoDestinations ? (
+                    <ThemedText style={{ color: palette.muted }}>Loading locations...</ThemedText>
+                  ) : null}
+                  {ecoDestinationError ? (
+                    <ThemedText style={{ color: palette.danger }}>{ecoDestinationError}</ThemedText>
+                  ) : null}
+                </>
+              )}
+            </View>
+          </View>
+        ) : null}
 
         <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
           {isSimulating && selectedRoute ? (
@@ -3340,19 +3692,53 @@ export default function MapScreen() {
                     : null}
                 </View>
 
-                <Pressable
-                  disabled={isFetchingRoutes || isSimulating}
-                  onPress={() => void handleFindRoutes()}
-                  style={[
-                    styles.primaryButton,
-                    shouldCompactSearchPanel ? styles.primaryButtonCompact : null,
-                    {
-                      backgroundColor: isFetchingRoutes || isSimulating ? '#7FA98E' : palette.accent,
-                    },
-                  ]}>
-                  <MaterialIcons name="travel-explore" size={20} color="#FFFFFF" />
-                  <ThemedText style={styles.primaryButtonText}>Find low-carbon routes</ThemedText>
-                </Pressable>
+                <View style={styles.searchActionRow}>
+                  <Pressable
+                    disabled={
+                      isFetchingRoutes ||
+                      isSimulating ||
+                      (!routePlan &&
+                        !destinationInput.trim() &&
+                        selectedDestinationSuggestion == null &&
+                        selectedEcoCategory == null)
+                    }
+                    onPress={handleClearNavigationState}
+                    style={[
+                      styles.searchSecondaryButton,
+                      shouldCompactSearchPanel ? styles.primaryButtonCompact : null,
+                      {
+                        backgroundColor: palette.cardSecondary,
+                        borderColor: palette.border,
+                        opacity:
+                          !routePlan &&
+                          !destinationInput.trim() &&
+                          selectedDestinationSuggestion == null &&
+                          selectedEcoCategory == null
+                            ? 0.55
+                            : 1,
+                      },
+                    ]}>
+                    <MaterialIcons name="close" size={18} color={palette.text} />
+                    <ThemedText style={[styles.searchSecondaryButtonText, { color: palette.text }]}>
+                      Clear
+                    </ThemedText>
+                  </Pressable>
+
+                  <Pressable
+                    disabled={isFetchingRoutes || isSimulating}
+                    onPress={() => void handleFindRoutes()}
+                    style={[
+                      styles.primaryButton,
+                      styles.searchPrimaryButton,
+                      shouldCompactSearchPanel ? styles.primaryButtonCompact : null,
+                      {
+                        backgroundColor: isFetchingRoutes || isSimulating ? '#7FA98E' : palette.accent,
+                      },
+                    ]}>
+                    <MaterialIcons name="travel-explore" size={20} color="#FFFFFF" />
+                    <ThemedText style={styles.primaryButtonText}>Find low-carbon routes</ThemedText>
+                  </Pressable>
+                </View>
 
                 {errorMessage ? (
                   <View
@@ -3867,6 +4253,55 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 6,
   },
+  ecoCategoryOverlay: {
+    position: 'absolute',
+    left: 16,
+    bottom: 210,
+  },
+  ecoCategoryRail: {
+    alignSelf: 'flex-start',
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 8,
+    gap: 8,
+  },
+  ecoCategoryChip: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  ecoDetailsOverlay: {
+    position: 'absolute',
+    left: 88,
+    right: 16,
+    bottom: 28,
+  },
+  ecoDetailsCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 14,
+    gap: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  ecoDetailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  ecoDetailsIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   sharedSimulationFooter: {
     marginBottom: 12,
     paddingHorizontal: 12,
@@ -3981,6 +4416,26 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
   },
+  searchActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  searchPrimaryButton: {
+    flex: 1,
+  },
+  searchSecondaryButton: {
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  searchSecondaryButtonText: {
+    fontWeight: '700',
+  },
   messageRow: {
     borderRadius: 14,
     borderWidth: 1,
@@ -4081,6 +4536,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 5,
   },
+  routeBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
   badgeText: {
     fontSize: 11,
     fontWeight: '600',
@@ -4139,8 +4600,8 @@ const styles = StyleSheet.create({
   },
   zoomControls: {
     position: 'absolute',
-    right: 16,
-    bottom: 96,
+    left: 16,
+    bottom: 28,
     gap: 10,
   },
   zoomLabelChip: {
@@ -4416,6 +4877,20 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  ecoMapMarker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,

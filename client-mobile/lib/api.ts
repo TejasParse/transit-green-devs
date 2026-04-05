@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 
+import { EcoDestination, EcoDestinationCategory } from '@/types/eco-destinations';
 import { PlantTreePayload, UserDashboard } from '@/types/dashboard';
 import {
   CarpoolRequestRecord,
@@ -77,6 +78,19 @@ export function fetchLeaderboard(userId?: number) {
   const path = query ? `/api/leaderboard?${query}` : '/api/leaderboard';
 
   return request<LeaderboardSnapshot>(path);
+}
+
+export function fetchEcoDestinations(category?: EcoDestinationCategory) {
+  const searchParams = new URLSearchParams();
+
+  if (category) {
+    searchParams.set('category', category);
+  }
+
+  const query = searchParams.toString();
+  const path = query ? `/api/eco-destinations?${query}` : '/api/eco-destinations';
+
+  return request<EcoDestination[]>(path);
 }
 
 export function fetchUserTrips(userId: number) {
