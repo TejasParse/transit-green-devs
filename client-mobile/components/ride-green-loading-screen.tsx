@@ -1,3 +1,4 @@
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useEffect, useRef } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
@@ -18,137 +19,140 @@ type RideGreenLoadingScreenProps = {
 
 type LeafSpec = {
   id: string;
-  offsetX: number;
-  offsetY: number;
-  width: number;
-  height: number;
+  positionX: number;
+  positionY: number;
+  size: number;
   rotate: number;
   color: string;
+  opacity: number;
   flyX: number;
   flyY: number;
   delay: number;
+  iconName: 'leaf' | 'leaf-maple';
 };
 
-const LEAF_SPECS: LeafSpec[] = [
-  {
-    id: 'top-left',
-    offsetX: -134,
-    offsetY: -84,
-    width: 34,
-    height: 18,
-    rotate: -28,
-    color: '#58A86A',
-    flyX: -220,
-    flyY: -210,
-    delay: 0,
-  },
-  {
-    id: 'upper-left',
-    offsetX: -98,
-    offsetY: -132,
-    width: 30,
-    height: 16,
-    rotate: -72,
-    color: '#7CCF7C',
-    flyX: -170,
-    flyY: -250,
-    delay: 40,
-  },
-  {
-    id: 'mid-left',
-    offsetX: -156,
-    offsetY: 6,
-    width: 28,
-    height: 14,
-    rotate: -12,
-    color: '#7BBD57',
-    flyX: -260,
-    flyY: -40,
-    delay: 120,
-  },
-  {
-    id: 'bottom-left',
-    offsetX: -104,
-    offsetY: 90,
-    width: 36,
-    height: 18,
-    rotate: 38,
-    color: '#84B96B',
-    flyX: -220,
-    flyY: 220,
-    delay: 80,
-  },
-  {
-    id: 'top-right',
-    offsetX: 126,
-    offsetY: -86,
-    width: 34,
-    height: 18,
-    rotate: 32,
-    color: '#4C9366',
-    flyX: 220,
-    flyY: -220,
-    delay: 20,
-  },
-  {
-    id: 'upper-right',
-    offsetX: 90,
-    offsetY: -138,
-    width: 28,
-    height: 14,
-    rotate: 78,
-    color: '#8FCB6D',
-    flyX: 150,
-    flyY: -260,
-    delay: 100,
-  },
-  {
-    id: 'mid-right',
-    offsetX: 152,
-    offsetY: -2,
-    width: 28,
-    height: 14,
-    rotate: 10,
-    color: '#72B86E',
-    flyX: 260,
-    flyY: -30,
-    delay: 60,
-  },
-  {
-    id: 'bottom-right',
-    offsetX: 104,
-    offsetY: 92,
-    width: 36,
-    height: 18,
-    rotate: -42,
-    color: '#A7C95A',
-    flyX: 220,
-    flyY: 220,
-    delay: 140,
-  },
-  {
-    id: 'bottom-center',
-    offsetX: 12,
-    offsetY: 126,
-    width: 24,
-    height: 12,
-    rotate: -6,
-    color: '#5AA964',
-    flyX: 16,
-    flyY: 270,
-    delay: 180,
-  },
-];
+const LEAF_COLORS = ['#58A86A', '#7CCF7C', '#7BBD57', '#84B96B', '#4C9366', '#8FCB6D', '#72B86E', '#A7C95A', '#5AA964'];
+const LEAF_ICONS: ('leaf' | 'leaf-maple')[] = ['leaf', 'leaf', 'leaf', 'leaf-maple'];
+const LEAF_COUNT = 84;
+const TITLE_HALO_SIZE = 236;
+const TITLE_SAFE_PADDING = 6;
+
+const AnimatedLeafIcon = Animated.createAnimatedComponent(MaterialCommunityIcons);
+
+function createSeededRandom(seed: number) {
+  let current = seed;
+
+  return () => {
+    current = (current * 1664525 + 1013904223) >>> 0;
+    return current / 4294967296;
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getProtectedTitleRadius(size: number, scaleFactor: number) {
+  const haloRadius = (TITLE_HALO_SIZE * scaleFactor) / 2;
+  const leafRadius = size * scaleFactor * 0.42;
+
+  return haloRadius + leafRadius + TITLE_SAFE_PADDING * scaleFactor;
+}
+
+function isInsideTitleSafeZone(
+  positionX: number,
+  positionY: number,
+  size: number,
+  width: number,
+  height: number,
+  scaleFactor: number
+) {
+  const protectedRadius = getProtectedTitleRadius(size, scaleFactor);
+
+  return Math.hypot(positionX * width, positionY * height) < protectedRadius;
+}
+
+function pushOutsideTitleSafeZone(
+  positionX: number,
+  positionY: number,
+  size: number,
+  width: number,
+  height: number,
+  scaleFactor: number
+) {
+  if (!isInsideTitleSafeZone(positionX, positionY, size, width, height, scaleFactor)) {
+    return { positionX, positionY };
+  }
+
+  const protectedRadius = getProtectedTitleRadius(size, scaleFactor);
+  const angle = Math.atan2(positionY || 0.0001, positionX || 0.0001);
+
+  return {
+    positionX: clamp((Math.cos(angle) * protectedRadius * 1.04) / width, -0.56, 0.56),
+    positionY: clamp((Math.sin(angle) * protectedRadius * 1.04) / height, -0.5, 0.5),
+  };
+}
+
+function createLeafSpecs(width: number, height: number, scaleFactor: number): LeafSpec[] {
+  const random = createSeededRandom(8421);
+
+  return Array.from({ length: LEAF_COUNT }, (_, index) => {
+    const size = 18 + random() * 18;
+    let positionX = 0;
+    let positionY = 0;
+    let attempts = 0;
+
+    do {
+      positionX = random() * 1.1 - 0.55;
+      positionY = random() * 1.04 - 0.52;
+      attempts += 1;
+    } while (isInsideTitleSafeZone(positionX, positionY, size, width, height, scaleFactor) && attempts < 24);
+
+    positionX = clamp(positionX, -0.56, 0.56);
+    positionY = clamp(positionY, -0.5, 0.5);
+    ({ positionX, positionY } = pushOutsideTitleSafeZone(
+      positionX,
+      positionY,
+      size,
+      width,
+      height,
+      scaleFactor
+    ));
+
+    const directionX = Math.abs(positionX) < 0.02 ? (random() > 0.5 ? 0.16 : -0.16) : positionX;
+    const directionY = Math.abs(positionY) < 0.02 ? (random() > 0.5 ? 0.16 : -0.16) : positionY;
+    const directionLength = Math.hypot(directionX, directionY) || 1;
+    const flyDistance = 260 + random() * 220;
+
+    return {
+      id: `leaf-${index}`,
+      positionX,
+      positionY,
+      size,
+      rotate: -80 + random() * 160,
+      color: LEAF_COLORS[Math.floor(random() * LEAF_COLORS.length)],
+      opacity: 0.58 + random() * 0.34,
+      flyX: (directionX / directionLength) * flyDistance,
+      flyY: (directionY / directionLength) * flyDistance,
+      delay: random() * 260,
+      iconName: LEAF_ICONS[Math.floor(random() * LEAF_ICONS.length)],
+    };
+  });
+}
 
 function AnimatedLeaf({
   spec,
   entryProgress,
   exitProgress,
+  width,
+  height,
   scaleFactor,
 }: {
   spec: LeafSpec;
   entryProgress: SharedValue<number>;
   exitProgress: SharedValue<number>;
+  width: number;
+  height: number;
   scaleFactor: number;
 }) {
   const animatedStyle = useAnimatedStyle(() => {
@@ -161,11 +165,11 @@ function AnimatedLeaf({
       [0, 0.08, 1],
       Extrapolation.CLAMP
     );
-    const baseX = spec.offsetX * scaleFactor;
-    const baseY = spec.offsetY * scaleFactor;
+    const baseX = spec.positionX * width;
+    const baseY = spec.positionY * height;
 
     return {
-      opacity: entry * (1 - exit * 0.92),
+      opacity: spec.opacity * entry * (1 - exit * 0.92),
       transform: [
         {
           translateX:
@@ -181,35 +185,33 @@ function AnimatedLeaf({
         },
         { rotate: `${spec.rotate + exit * (spec.flyX >= 0 ? 18 : -18)}deg` },
         {
-          scale: interpolate(entryProgress.value, [0, 1], [0.55, 1], Extrapolation.CLAMP) - exit * 0.18,
+          scale:
+            interpolate(entryProgress.value, [0, 1], [0.55, 1], Extrapolation.CLAMP) +
+            interpolate(exit, [0, 1], [0, 0.08], Extrapolation.CLAMP),
         },
       ],
     };
-  }, [scaleFactor, spec]);
+  }, [height, scaleFactor, spec, width]);
 
   return (
     <Animated.View
       style={[
         styles.leaf,
         {
-          backgroundColor: spec.color,
           left: '50%',
           top: '50%',
-          width: spec.width * scaleFactor,
-          height: spec.height * scaleFactor,
-          borderRadius: spec.height * scaleFactor,
-          marginLeft: (-spec.width * scaleFactor) / 2,
-          marginTop: (-spec.height * scaleFactor) / 2,
+          width: spec.size * scaleFactor,
+          height: spec.size * scaleFactor,
+          marginLeft: (-spec.size * scaleFactor) / 2,
+          marginTop: (-spec.size * scaleFactor) / 2,
         },
         animatedStyle,
       ]}>
-      <View
-        style={[
-          styles.leafVein,
-          {
-            width: Math.max(1, spec.width * scaleFactor * 0.1),
-          },
-        ]}
+      <AnimatedLeafIcon
+        name={spec.iconName}
+        size={spec.size * scaleFactor}
+        color={spec.color}
+        style={styles.leafIcon}
       />
     </Animated.View>
   );
@@ -221,6 +223,7 @@ export function RideGreenLoadingScreen({ onComplete }: RideGreenLoadingScreenPro
   const exitProgress = useSharedValue(0);
   const onCompleteRef = useRef(onComplete);
   const scaleFactor = Math.max(0.8, Math.min(Math.min(width / 390, height / 844), 1.18));
+  const leafSpecs = createLeafSpecs(width, height, scaleFactor);
   onCompleteRef.current = onComplete;
 
   function finishLoading() {
@@ -307,12 +310,14 @@ export function RideGreenLoadingScreen({ onComplete }: RideGreenLoadingScreenPro
           },
         ]}
       />
-      {LEAF_SPECS.map((spec) => (
+      {leafSpecs.map((spec) => (
         <AnimatedLeaf
           key={spec.id}
           spec={spec}
           entryProgress={entryProgress}
           exitProgress={exitProgress}
+          width={width}
+          height={height}
           scaleFactor={scaleFactor}
         />
       ))}
@@ -373,9 +378,7 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 6,
   },
-  leafVein: {
-    height: '70%',
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.38)',
+  leafIcon: {
+    textAlign: 'center',
   },
 });
